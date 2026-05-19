@@ -401,6 +401,10 @@ public class KmsService {
 
     public record DecryptResult(byte[] plaintext, String keyArn) {}
 
+    public record GenerateMacResult(byte[] mac, String keyArn) {}
+
+    public record VerifyMacResult(String keyArn) {}
+
     private record ParsedBlob(String keyId, String nonce, String contextFingerprint, String payload) {}
 
     private static ParsedBlob parseBlob(byte[] ciphertext) {
@@ -514,6 +518,15 @@ public class KmsService {
 
     public byte[] generateMac(String keyId, byte[] message, String algorithm, String region) {
         KmsKey kmsKey = validateMacOperationKey(keyId, algorithm, region);
+        return generateMac(kmsKey, message, algorithm);
+    }
+
+    public GenerateMacResult generateMacAndResolveKey(String keyId, byte[] message, String algorithm, String region) {
+        KmsKey kmsKey = validateMacOperationKey(keyId, algorithm, region);
+        return new GenerateMacResult(generateMac(kmsKey, message, algorithm), kmsKey.getArn());
+    }
+
+    private byte[] generateMac(KmsKey kmsKey, byte[] message, String algorithm) {
         validateMacMessageLength(message);
 
         try {
@@ -532,7 +545,19 @@ public class KmsService {
 
     public void verifyMac(String keyId, byte[] message, byte[] mac, String algorithm, String region) {
         validateMacLength(mac);
-        byte[] expected = generateMac(keyId, message, algorithm, region);
+        KmsKey kmsKey = validateMacOperationKey(keyId, algorithm, region);
+        verifyMac(kmsKey, message, mac, algorithm);
+    }
+
+    public VerifyMacResult verifyMacAndResolveKey(String keyId, byte[] message, byte[] mac, String algorithm, String region) {
+        validateMacLength(mac);
+        KmsKey kmsKey = validateMacOperationKey(keyId, algorithm, region);
+        verifyMac(kmsKey, message, mac, algorithm);
+        return new VerifyMacResult(kmsKey.getArn());
+    }
+
+    private void verifyMac(KmsKey kmsKey, byte[] message, byte[] mac, String algorithm) {
+        byte[] expected = generateMac(kmsKey, message, algorithm);
         if (!MessageDigest.isEqual(expected, mac)) {
             throw new AwsException("KMSInvalidMacException", "The MAC is not valid.", 400);
         }
