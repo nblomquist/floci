@@ -1,5 +1,7 @@
 package io.github.hectorvent.floci.services.s3;
 
+import static io.github.hectorvent.floci.services.s3.S3RequestParser.hasQueryParam;
+
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.AwsNamespaces;
 import io.github.hectorvent.floci.core.common.XmlBuilder;
@@ -2256,13 +2258,6 @@ public class S3Controller {
             }
             return disposition.substring(valueStart, valueEnd).trim();
         }
-    }
-
-    private boolean hasQueryParam(UriInfo uriInfo, String param) {
-        if (uriInfo.getQueryParameters().containsKey(param)) return true;
-        String query = uriInfo.getRequestUri().getQuery();
-        if (query == null) return false;
-        return query.equals(param) || query.contains(param + "&") || query.contains("&" + param);
     }
 
     /**
