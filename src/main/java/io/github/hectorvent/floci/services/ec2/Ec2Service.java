@@ -1,12 +1,15 @@
 package io.github.hectorvent.floci.services.ec2;
 
 import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -24,6 +27,10 @@ import io.github.hectorvent.floci.services.ec2.model.Image;
 import io.github.hectorvent.floci.services.ec2.model.Instance;
 import io.github.hectorvent.floci.services.ec2.model.InstanceNetworkInterface;
 import io.github.hectorvent.floci.services.ec2.model.InstanceState;
+import io.github.hectorvent.floci.services.ec2.model.NetworkInterface;
+import io.github.hectorvent.floci.services.ec2.model.NetworkInterfaceAssociation;
+import io.github.hectorvent.floci.services.ec2.model.NetworkInterfaceAttachment;
+import io.github.hectorvent.floci.services.ec2.model.NetworkInterfacePrivateIpAddress;
 import io.github.hectorvent.floci.services.ec2.model.InternetGateway;
 import io.github.hectorvent.floci.services.ec2.model.InternetGatewayAttachment;
 import io.github.hectorvent.floci.services.ec2.model.IpPermission;
@@ -48,6 +55,8 @@ import jakarta.inject.Inject;
 public class Ec2Service {
 
     private static final Logger LOG = Logger.getLogger(Ec2Service.class);
+    private static final DateTimeFormatter ISO_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+            .withZone(ZoneOffset.UTC);
 
     private final String accountId;
     private final EmulatorConfig config;
@@ -1467,5 +1476,76 @@ public class Ec2Service {
             throw new AwsException("InvalidVolume.NotFound",
                     "The volume '" + volumeId + "' does not exist.", 400);
         }
+    }
+
+    // ─── Network Interfaces ─────────────────────────────────────────────────────
+
+    public List<NetworkInterface> describeNetworkInterfaces(String region, List<String> networkInterfaceIds) {
+        ensureDefaultResources(region);
+        List<NetworkInterface> result = new ArrayList<>();
+        for (Instance inst : instances.values()) {
+            if (!inst.getRegion().equals(region)) continue;
+            for (InstanceNetworkInterface eni : inst.getNetworkInterfaces()) {
+                if (!networkInterfaceIds.isEmpty()
+                        && !networkInterfaceIds.contains(eni.getNetworkInterfaceId())) {
+                    continue;
+                }
+                NetworkInterface ni = new NetworkInterface();
+                ni.setNetworkInterfaceId(eni.getNetworkInterfaceId());
+                ni.setSubnetId(eni.getSubnetId());
+                ni.setVpcId(eni.getVpcId());
+                ni.setDescription(eni.getDescription());
+                ni.setOwnerId(eni.getOwnerId());
+                ni.setStatus(eni.getStatus());
+                ni.setMacAddress(eni.getMacAddress());
+                ni.setPrivateIpAddress(eni.getPrivateIpAddress());
+                ni.setPrivateDnsName(eni.getPrivateDnsName());
+                ni.setSourceDestCheck(eni.isSourceDestCheck());
+                ni.setGroups(new ArrayList<>(eni.getGroups()));
+                // Phase 3: availability zone, tags, interface type
+                if (inst.getPlacement() != null) {
+                    ni.setAvailabilityZone(inst.getPlacement().getAvailabilityZone());
+                }
+                ni.getTagSet().addAll(inst.getTags());
+
+                NetworkInterfaceAttachment att = new NetworkInterfaceAttachment();
+                att.setAttachmentId(eni.getAttachmentId());
+                att.setDeviceIndex(eni.getDeviceIndex());
+                att.setStatus("attached");
+                att.setInstanceId(inst.getInstanceId());
+                att.setInstanceOwnerId(eni.getOwnerId());
+                // Phase 3: attachTime from instance launchTime, deleteOnTermination
+                if (inst.getLaunchTime() != null) {
+                    att.setAttachTime(ISO_FMT.format(inst.getLaunchTime()));
+                }
+                att.setDeleteOnTermination(true);
+                ni.setAttachment(att);
+
+                // Phase 3: privateIpAddressesSet — primary IP
+                NetworkInterfacePrivateIpAddress primaryIp = new NetworkInterfacePrivateIpAddress();
+                primaryIp.setPrivateIpAddress(eni.getPrivateIpAddress());
+                primaryIp.setPrivateDnsName(eni.getPrivateDnsName());
+                primaryIp.setPrimary(true);
+                // Look up EIP association for this instance
+                addressForInstance(inst.getInstanceId()).ifPresent(addr -> {
+                    NetworkInterfaceAssociation assoc = new NetworkInterfaceAssociation();
+                    assoc.setPublicIp(addr.getPublicIp());
+                    assoc.setAllocationId(addr.getAllocationId());
+                    assoc.setAssociationId(addr.getAssociationId());
+                    assoc.setIpOwnerId(eni.getOwnerId());
+                    primaryIp.setAssociation(assoc);
+                });
+                ni.getPrivateIpAddresses().add(primaryIp);
+
+                result.add(ni);
+            }
+        }
+        return result;
+    }
+
+    private Optional<Address> addressForInstance(String instanceId) {
+        return addresses.values().stream()
+                .filter(a -> instanceId.equals(a.getInstanceId()) && a.getAssociationId() != null)
+                .findFirst();
     }
 }

@@ -34,6 +34,7 @@ class Ec2IntegrationTest {
     private static String allocationId;
     private static String associationId;
     private static String volumeId;
+    private static String networkInterfaceId;
 
     // =========================================================================
     // Default resources
@@ -733,6 +734,71 @@ class Ec2IntegrationTest {
     }
 
     // =========================================================================
+    // Network Interfaces
+    // =========================================================================
+
+    @Test
+    @Order(79)
+    void describeNetworkInterfacesBeforeRun() {
+        // Before any instances exist, the set should be empty
+        given()
+            .formParam("Action", "DescribeNetworkInterfaces")
+            .header("Authorization", AUTH_HEADER)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .contentType("application/xml")
+            .body("DescribeNetworkInterfacesResponse.networkInterfaceSet.item.size()", equalTo(0));
+    }
+
+    @Test
+    @Order(88)
+    void describeNetworkInterfacesAfterRun() {
+        networkInterfaceId = given()
+            .formParam("Action", "DescribeNetworkInterfaces")
+            .header("Authorization", AUTH_HEADER)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .contentType("application/xml")
+            .body("DescribeNetworkInterfacesResponse.networkInterfaceSet.item.size()", greaterThanOrEqualTo(1))
+            .body("DescribeNetworkInterfacesResponse.networkInterfaceSet.item[0].networkInterfaceId",
+                    startsWith("eni-"))
+            .body("DescribeNetworkInterfacesResponse.networkInterfaceSet.item[0].vpcId", notNullValue())
+            .body("DescribeNetworkInterfacesResponse.networkInterfaceSet.item[0].subnetId", notNullValue())
+            .body("DescribeNetworkInterfacesResponse.networkInterfaceSet.item[0].status", equalTo("in-use"))
+            .body("DescribeNetworkInterfacesResponse.networkInterfaceSet.item[0].privateIpAddress",
+                    notNullValue())
+            .body("DescribeNetworkInterfacesResponse.networkInterfaceSet.item[0].attachment.attachmentId",
+                    startsWith("eni-attach-"))
+            .body("DescribeNetworkInterfacesResponse.networkInterfaceSet.item[0].attachment.deviceIndex",
+                    equalTo("0"))
+            .body("DescribeNetworkInterfacesResponse.networkInterfaceSet.item[0].attachment.instanceId",
+                    notNullValue())
+            .body("DescribeNetworkInterfacesResponse.networkInterfaceSet.item[0].groupSet.item.size()",
+                    greaterThanOrEqualTo(1))
+            .extract().path("DescribeNetworkInterfacesResponse.networkInterfaceSet.item[0].networkInterfaceId");
+    }
+
+    @Test
+    @Order(89)
+    void describeNetworkInterfacesByFilter() {
+        given()
+            .formParam("Action", "DescribeNetworkInterfaces")
+            .formParam("NetworkInterfaceId.1", networkInterfaceId)
+            .header("Authorization", AUTH_HEADER)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("DescribeNetworkInterfacesResponse.networkInterfaceSet.item.size()", equalTo(1))
+            .body("DescribeNetworkInterfacesResponse.networkInterfaceSet.item[0].networkInterfaceId",
+                    equalTo(networkInterfaceId));
+    }
+
+    // =========================================================================
     // Tags
     // =========================================================================
 
@@ -810,6 +876,44 @@ class Ec2IntegrationTest {
         .then()
             .statusCode(200)
             .body("DescribeTagsResponse.tagSet.item.size()", equalTo(0));
+    }
+
+    @Test
+    @Order(92)
+    void describeNetworkInterfacesFullFields() {
+        // Phase 3: Full field coverage — privateIpAddressesSet, association, tagSet, enriched attachment
+        given()
+            .formParam("Action", "DescribeNetworkInterfaces")
+            .formParam("NetworkInterfaceId.1", networkInterfaceId)
+            .header("Authorization", AUTH_HEADER)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .contentType("application/xml")
+            // availabilityZone from instance placement
+            .body("DescribeNetworkInterfacesResponse.networkInterfaceSet.item[0].availabilityZone",
+                    startsWith("us-east-1"))
+            // tagSet propagated from instance tags (created at Order 90)
+            .body("DescribeNetworkInterfacesResponse.networkInterfaceSet.item[0].tagSet.item[0].key",
+                    equalTo("Name"))
+            .body("DescribeNetworkInterfacesResponse.networkInterfaceSet.item[0].tagSet.item[0].value",
+                    equalTo("test-instance"))
+            // attachment: attachTime (from instance launchTime) and deleteOnTermination
+            .body("DescribeNetworkInterfacesResponse.networkInterfaceSet.item[0].attachment.attachTime",
+                    notNullValue())
+            .body("DescribeNetworkInterfacesResponse.networkInterfaceSet.item[0].attachment.deleteOnTermination",
+                    equalTo("true"))
+            // privateIpAddressesSet with primary IP and EIP association (from Order 84)
+            .body("DescribeNetworkInterfacesResponse.networkInterfaceSet.item[0]." +
+                    "privateIpAddressesSet.item[0].privateIpAddress", notNullValue())
+            .body("DescribeNetworkInterfacesResponse.networkInterfaceSet.item[0]." +
+                    "privateIpAddressesSet.item[0].primary", equalTo("true"))
+            .body("DescribeNetworkInterfacesResponse.networkInterfaceSet.item[0]." +
+                    "privateIpAddressesSet.item[0].association.publicIp", notNullValue())
+            .body("DescribeNetworkInterfacesResponse.networkInterfaceSet.item[0]." +
+                    "privateIpAddressesSet.item[0].association.allocationId",
+                    startsWith("eipalloc-"));
     }
 
     // =========================================================================
