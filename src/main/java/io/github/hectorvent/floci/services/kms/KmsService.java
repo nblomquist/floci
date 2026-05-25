@@ -6,6 +6,8 @@ import io.github.hectorvent.floci.core.common.ReservedTags;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
 import io.github.hectorvent.floci.services.kms.model.KmsAlias;
+import io.github.hectorvent.floci.services.kms.model.KmsCustomKeyStore;
+import io.github.hectorvent.floci.services.kms.model.KmsCustomKeyStoreConnectionState;
 import io.github.hectorvent.floci.services.kms.model.KmsKey;
 import com.fasterxml.jackson.core.type.TypeReference;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -49,6 +51,7 @@ public class KmsService {
 
     private final StorageBackend<String, KmsKey> keyStore;
     private final StorageBackend<String, KmsAlias> aliasStore;
+    private final StorageBackend<String, KmsCustomKeyStore> customKeyStoreStore;
     private final RegionResolver regionResolver;
     private final SecureRandom secureRandom;
 
@@ -58,26 +61,39 @@ public class KmsService {
                         new TypeReference<Map<String, KmsKey>>() {}),
                 storageFactory.create("kms", "kms-aliases.json",
                         new TypeReference<Map<String, KmsAlias>>() {}),
+                storageFactory.create("kms", "kms-custom-key-stores.json",
+                        new TypeReference<Map<String, KmsCustomKeyStore>>() {}),
                 regionResolver);
     }
 
     KmsService(StorageBackend<String, KmsKey> keyStore,
                StorageBackend<String, KmsAlias> aliasStore,
+               StorageBackend<String, KmsCustomKeyStore> customKeyStoreStore,
                RegionResolver regionResolver) {
-        this(keyStore, aliasStore, regionResolver, new SecureRandom());
+        this(keyStore, aliasStore, customKeyStoreStore, regionResolver, new SecureRandom());
     }
 
     KmsService(StorageBackend<String, KmsKey> keyStore,
                StorageBackend<String, KmsAlias> aliasStore,
+               StorageBackend<String, KmsCustomKeyStore> customKeyStoreStore,
                RegionResolver regionResolver,
                SecureRandom secureRandom) {
         this.keyStore = keyStore;
         this.aliasStore = aliasStore;
+        this.customKeyStoreStore = customKeyStoreStore;
         this.regionResolver = regionResolver;
         this.secureRandom = secureRandom;
     }
 
     public byte[] generateRandom(int numberOfBytes) {
+        return generateRandom(numberOfBytes, null, null);
+    }
+
+    public byte[] generateRandom(int numberOfBytes, String customKeyStoreId, String region) {
+        // Validate custom key store if specified
+        if (customKeyStoreId != null && region != null) {
+            findCustomKeyStore(customKeyStoreId, region); // throws CustomKeyStoreNotFoundException
+        }
         if (numberOfBytes < 1 || numberOfBytes > 1024) {
             throw new AwsException("ValidationException",
                     "1 validation error detected: Value '" + numberOfBytes + "' at 'numberOfBytes' failed to satisfy constraint: Member must have value greater than or equal to 1 and less than or equal to 1024",
@@ -104,6 +120,11 @@ public class KmsService {
     }
 
     public KmsKey createKey(String description, String keyUsage, String customerMasterKeySpec, String policy, Map<String, String> tags, String region) {
+        return createKey(description, keyUsage, customerMasterKeySpec, policy, tags, "AWS_KMS", null, region);
+    }
+
+    public KmsKey createKey(String description, String keyUsage, String customerMasterKeySpec, String policy,
+                            Map<String, String> tags, String origin, String customKeyStoreId, String region) {
         String keyId = resolveKeyId(tags);
         if (keyStore.get(region + "::" + keyId).isPresent()) {
             throw new AwsException("AlreadyExistsException", "Key already exists", 400);
@@ -114,6 +135,22 @@ public class KmsService {
         String effectiveSpec = customerMasterKeySpec != null ? customerMasterKeySpec : "SYMMETRIC_DEFAULT";
         validateKeyUsageForSpec(effectiveUsage, effectiveSpec);
 
+        // Validate origin / custom key store
+        String effectiveOrigin = (origin != null) ? origin : "AWS_KMS";
+        String effectiveCustomKeyStoreId = customKeyStoreId;
+
+        if ("AWS_CLOUDHSM".equals(effectiveOrigin)) {
+            if (effectiveCustomKeyStoreId == null || effectiveCustomKeyStoreId.isBlank()) {
+                throw new AwsException("ValidationException",
+                        "CustomKeyStoreId is required when Origin is AWS_CLOUDHSM.", 400);
+            }
+            KmsCustomKeyStore store = findCustomKeyStore(effectiveCustomKeyStoreId, region);
+            if (!"CONNECTED".equals(store.getConnectionState())) {
+                throw new AwsException("CustomKeyStoreInvalidStateException",
+                        "Custom key store " + effectiveCustomKeyStoreId + " is not connected.", 400);
+            }
+        }
+
         KmsKey key = new KmsKey();
         key.setKeyId(keyId);
         key.setArn(arn);
@@ -122,12 +159,238 @@ public class KmsService {
         key.setCustomerMasterKeySpec(effectiveSpec);
         key.setPolicy(policy != null ? policy : buildDefaultKeyPolicy());
         key.getTags().putAll(ReservedTags.stripReservedTags(tags));
+        key.setOrigin(effectiveOrigin);
+        key.setCustomKeyStoreId(effectiveCustomKeyStoreId);
 
         generateKeyMaterial(key);
 
         keyStore.put(region + "::" + keyId, key);
-        LOG.infov("Created KMS key: {0} ({1}/{2}) in {3}", keyId, key.getKeyUsage(), key.getCustomerMasterKeySpec(), region);
+        LOG.infov("Created KMS key: {0} ({1}/{2}) in {3} origin={4}", keyId, key.getKeyUsage(), key.getCustomerMasterKeySpec(), region, effectiveOrigin);
         return key;
+    }
+
+    // ──────────────────────────── Custom Key Stores ────────────────────────────
+
+    public KmsCustomKeyStore createCustomKeyStore(String customKeyStoreName,
+                                                   String cloudHsmClusterId,
+                                                   String trustAnchorCertificate,
+                                                   String keyStorePassword,
+                                                   String region) {
+        // Validate required parameters
+        if (customKeyStoreName == null || customKeyStoreName.isBlank()) {
+            throw new AwsException("ValidationException",
+                    "CustomKeyStoreName is required.", 400);
+        }
+        if (cloudHsmClusterId == null || cloudHsmClusterId.isBlank()) {
+            throw new AwsException("ValidationException",
+                    "CloudHsmClusterId is required.", 400);
+        }
+        if (trustAnchorCertificate == null || trustAnchorCertificate.isBlank()) {
+            throw new AwsException("ValidationException",
+                    "TrustAnchorCertificate is required.", 400);
+        }
+        if (keyStorePassword == null || keyStorePassword.isBlank()) {
+            throw new AwsException("ValidationException",
+                    "KeyStorePassword is required.", 400);
+        }
+
+        // Check for duplicate name
+        String prefix = region + "::";
+        boolean nameExists = customKeyStoreStore.scan(k -> k.startsWith(prefix))
+                .stream()
+                .anyMatch(s -> customKeyStoreName.equals(s.getCustomKeyStoreName()));
+        if (nameExists) {
+            throw new AwsException("AlreadyExistsException",
+                    "A custom key store named '" + customKeyStoreName + "' already exists in this account and region.", 400);
+        }
+
+        String storeId = "cks-" + UUID.randomUUID();
+
+        KmsCustomKeyStore store = new KmsCustomKeyStore();
+        store.setCustomKeyStoreId(storeId);
+        store.setCustomKeyStoreName(customKeyStoreName);
+        store.setCustomKeyStoreType("AWS_CLOUDHSM");
+        store.setCloudHsmClusterId(cloudHsmClusterId);
+        store.setTrustAnchorCertificate(trustAnchorCertificate);
+        store.setKeyStorePassword(keyStorePassword);
+        store.setConnectionState(KmsCustomKeyStoreConnectionState.CONNECTED.name());
+
+        customKeyStoreStore.put(region + "::" + storeId, store);
+        LOG.infov("Created custom key store: {0} ({1}) in {2}", storeId, customKeyStoreName, region);
+        return store;
+    }
+
+    public DescribeCustomKeyStoresResult describeCustomKeyStores(String customKeyStoreId,
+                                                                  String customKeyStoreName,
+                                                                  int limit,
+                                                                  String marker,
+                                                                  String region) {
+        String prefix = region + "::";
+        List<KmsCustomKeyStore> all = customKeyStoreStore.scan(k -> k.startsWith(prefix));
+
+        // Filter by custom key store ID
+        if (customKeyStoreId != null) {
+            String fullKey = prefix + customKeyStoreId;
+            var found = customKeyStoreStore.get(fullKey);
+            if (found.isEmpty()) {
+                return new DescribeCustomKeyStoresResult(List.of(), null, false);
+            }
+            return new DescribeCustomKeyStoresResult(List.of(found.get()), null, false);
+        }
+
+        // Filter by custom key store name
+        if (customKeyStoreName != null) {
+            all = all.stream()
+                    .filter(s -> customKeyStoreName.equals(s.getCustomKeyStoreName()))
+                    .toList();
+        }
+
+        // Pagination
+        int startIndex = 0;
+        if (marker != null && !marker.isEmpty()) {
+            try {
+                startIndex = Integer.parseInt(marker);
+            } catch (NumberFormatException e) {
+                startIndex = 0;
+            }
+        }
+
+        int effectiveLimit = (limit <= 0) ? all.size() : limit;
+        int endIndex = Math.min(startIndex + effectiveLimit, all.size());
+        boolean truncated = endIndex < all.size();
+
+        List<KmsCustomKeyStore> page = all.subList(startIndex, endIndex);
+        String nextMarker = truncated ? String.valueOf(endIndex) : null;
+
+        return new DescribeCustomKeyStoresResult(page, nextMarker, truncated);
+    }
+
+    public void updateCustomKeyStore(String customKeyStoreId,
+                                     String newCustomKeyStoreName,
+                                     String cloudHsmClusterId,
+                                     String trustAnchorCertificate,
+                                     String keyStorePassword,
+                                     String region) {
+        KmsCustomKeyStore store = findCustomKeyStore(customKeyStoreId, region);
+
+        boolean changingName = (newCustomKeyStoreName != null && !newCustomKeyStoreName.isEmpty());
+        boolean changingCluster = (cloudHsmClusterId != null && !cloudHsmClusterId.isEmpty());
+        boolean changingCert = (trustAnchorCertificate != null && !trustAnchorCertificate.isEmpty());
+        boolean changingPassword = (keyStorePassword != null && !keyStorePassword.isEmpty());
+
+        boolean needsDisconnected = changingCluster || changingCert || changingPassword;
+
+        if (needsDisconnected && KmsCustomKeyStoreConnectionState.CONNECTED.name().equals(store.getConnectionState())) {
+            throw new AwsException("CustomKeyStoreInvalidStateException",
+                    "Custom key store must be in DISCONNECTED state to modify CloudHsmClusterId, " +
+                    "TrustAnchorCertificate, or KeyStorePassword.",
+                    400);
+        }
+
+        // Duplicate name check
+        if (changingName) {
+            String prefix = region + "::";
+            boolean duplicate = customKeyStoreStore.scan(k -> k.startsWith(prefix)).stream()
+                    .anyMatch(s -> newCustomKeyStoreName.equals(s.getCustomKeyStoreName())
+                            && !customKeyStoreId.equals(s.getCustomKeyStoreId()));
+            if (duplicate) {
+                throw new AwsException("AlreadyExistsException",
+                        "Custom key store name " + newCustomKeyStoreName + " already exists in this account and region.",
+                        409);
+            }
+            store.setCustomKeyStoreName(newCustomKeyStoreName);
+        }
+
+        if (changingCluster) {
+            store.setCloudHsmClusterId(cloudHsmClusterId);
+        }
+        if (changingCert) {
+            store.setTrustAnchorCertificate(trustAnchorCertificate);
+        }
+        if (changingPassword) {
+            store.setKeyStorePassword(keyStorePassword);
+        }
+
+        String fullKey = region + "::" + customKeyStoreId;
+        customKeyStoreStore.put(fullKey, store);
+    }
+
+    /**
+     * Internal helper to transition a custom key store's connection state.
+     * Used for test setup and internal state machine transitions.
+     */
+    public void updateCustomKeyStoreConnectionState(String customKeyStoreId, String region, String newState) {
+        KmsCustomKeyStore store = findCustomKeyStore(customKeyStoreId, region);
+        store.setConnectionState(newState);
+        String fullKey = region + "::" + customKeyStoreId;
+        customKeyStoreStore.put(fullKey, store);
+    }
+
+    public void connectCustomKeyStore(String customKeyStoreId, String region) {
+        KmsCustomKeyStore store = findCustomKeyStore(customKeyStoreId, region);
+        String state = store.getConnectionState();
+
+        if ("CREATING".equals(state) || "DISCONNECTING".equals(state)) {
+            throw new AwsException("CustomKeyStoreInvalidStateException",
+                    "Custom key store " + customKeyStoreId + " cannot be connected in " + state + " state.",
+                    400);
+        }
+
+        // CONNECTED -> idempotent, FAILED/DISCONNECTED -> transition
+        if (!"CONNECTED".equals(state)) {
+            store.setConnectionState(KmsCustomKeyStoreConnectionState.CONNECTED.name());
+            String fullKey = region + "::" + customKeyStoreId;
+            customKeyStoreStore.put(fullKey, store);
+        }
+    }
+
+    public void disconnectCustomKeyStore(String customKeyStoreId, String region) {
+        KmsCustomKeyStore store = findCustomKeyStore(customKeyStoreId, region);
+        String state = store.getConnectionState();
+
+        if ("CREATING".equals(state) || "DISCONNECTING".equals(state)) {
+            throw new AwsException("CustomKeyStoreInvalidStateException",
+                    "Custom key store " + customKeyStoreId + " cannot be disconnected in " + state + " state.",
+                    400);
+        }
+
+        // DISCONNECTED -> idempotent, CONNECTED/FAILED -> transition
+        if (!"DISCONNECTED".equals(state)) {
+            store.setConnectionState(KmsCustomKeyStoreConnectionState.DISCONNECTED.name());
+            String fullKey = region + "::" + customKeyStoreId;
+            customKeyStoreStore.put(fullKey, store);
+        }
+    }
+
+    public void deleteCustomKeyStore(String customKeyStoreId, String region) {
+        KmsCustomKeyStore store = findCustomKeyStore(customKeyStoreId, region);
+
+        if (!"DISCONNECTED".equals(store.getConnectionState())) {
+            throw new AwsException("CustomKeyStoreInvalidStateException",
+                    "Custom key store " + customKeyStoreId + " must be in DISCONNECTED state to be deleted.",
+                    400);
+        }
+
+        // Check if any keys reference this store
+        String prefix = region + "::";
+        boolean hasReferencingKeys = keyStore.scan(k -> k.startsWith(prefix)).stream()
+                .anyMatch(k -> customKeyStoreId.equals(k.getCustomKeyStoreId()));
+        if (hasReferencingKeys) {
+            throw new AwsException("CustomKeyStoreHasCMKsException",
+                    "Custom key store " + customKeyStoreId + " has associated KMS keys and cannot be deleted.",
+                    400);
+        }
+
+        String fullKey = region + "::" + customKeyStoreId;
+        customKeyStoreStore.delete(fullKey);
+    }
+
+    private KmsCustomKeyStore findCustomKeyStore(String customKeyStoreId, String region) {
+        String fullKey = region + "::" + customKeyStoreId;
+        return customKeyStoreStore.get(fullKey)
+                .orElseThrow(() -> new AwsException("CustomKeyStoreNotFoundException",
+                        "Custom key store " + customKeyStoreId + " not found.",
+                        400));
     }
 
     private String resolveKeyId(Map<String, String> tags) {
@@ -434,6 +697,8 @@ public class KmsService {
     public record GenerateMacResult(byte[] mac, String keyArn) {}
 
     public record VerifyMacResult(String keyArn) {}
+
+    public record DescribeCustomKeyStoresResult(List<KmsCustomKeyStore> stores, String nextMarker, boolean truncated) {}
 
     private record ParsedBlob(String keyId, String nonce, String contextFingerprint, String payload) {}
 

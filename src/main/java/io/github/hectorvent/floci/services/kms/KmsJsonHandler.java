@@ -5,6 +5,7 @@ import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.common.ReservedTags;
 import io.github.hectorvent.floci.services.kms.model.KmsAlias;
+import io.github.hectorvent.floci.services.kms.model.KmsCustomKeyStore;
 import io.github.hectorvent.floci.services.kms.model.KmsKey;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -63,6 +64,12 @@ public class KmsJsonHandler {
             case "EnableKeyRotation" -> handleEnableKeyRotation(request, region);
             case "DisableKeyRotation" -> handleDisableKeyRotation(request, region);
             case "RotateKeyOnDemand" -> handleRotateKeyOnDemand(request, region);
+            case "CreateCustomKeyStore" -> handleCreateCustomKeyStore(request, region);
+            case "DescribeCustomKeyStores" -> handleDescribeCustomKeyStores(request, region);
+            case "UpdateCustomKeyStore" -> handleUpdateCustomKeyStore(request, region);
+            case "ConnectCustomKeyStore" -> handleConnectCustomKeyStore(request, region);
+            case "DisconnectCustomKeyStore" -> handleDisconnectCustomKeyStore(request, region);
+            case "DeleteCustomKeyStore" -> handleDeleteCustomKeyStore(request, region);
             default -> Response.status(400)
                     .entity(new AwsErrorResponse("UnsupportedOperation", "Operation " + action + " is not supported."))
                     .build();
@@ -78,8 +85,10 @@ public class KmsJsonHandler {
         String policy = request.path("Policy").isMissingNode() ? null : request.path("Policy").asText(null);
         Map<String, String> tags = new HashMap<>();
         request.path("Tags").forEach(t -> tags.put(t.path("TagKey").asText(), t.path("TagValue").asText()));
-        
-        KmsKey key = service.createKey(description, keyUsage, customerMasterKeySpec, policy, tags, region);
+        String origin = request.path("Origin").isMissingNode() ? null : request.path("Origin").asText(null);
+        String customKeyStoreId = request.path("CustomKeyStoreId").isMissingNode() ? null : request.path("CustomKeyStoreId").asText(null);
+
+        KmsKey key = service.createKey(description, keyUsage, customerMasterKeySpec, policy, tags, origin, customKeyStoreId, region);
         ObjectNode response = objectMapper.createObjectNode();
         response.set("KeyMetadata", keyToNode(key));
         return Response.ok(response).build();
@@ -393,19 +402,94 @@ public class KmsJsonHandler {
         return Response.ok(response).build();
     }
 
+    private Response handleCreateCustomKeyStore(JsonNode request, String region) {
+        String name = request.path("CustomKeyStoreName").asText(null);
+        String clusterId = request.path("CloudHsmClusterId").asText(null);
+        String cert = request.path("TrustAnchorCertificate").asText(null);
+        String password = request.path("KeyStorePassword").asText(null);
+
+        KmsCustomKeyStore store = service.createCustomKeyStore(name, clusterId, cert, password, region);
+
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("CustomKeyStoreId", store.getCustomKeyStoreId());
+        return Response.ok(response).build();
+    }
+
+    private Response handleDescribeCustomKeyStores(JsonNode request, String region) {
+        String storeId = request.path("CustomKeyStoreId").isMissingNode()
+                ? null : request.path("CustomKeyStoreId").asText(null);
+        String storeName = request.path("CustomKeyStoreName").isMissingNode()
+                ? null : request.path("CustomKeyStoreName").asText(null);
+        int limit = request.path("Limit").isMissingNode() ? 0 : request.path("Limit").asInt(0);
+        String marker = request.path("Marker").isMissingNode() ? null : request.path("Marker").asText(null);
+
+        var result = service.describeCustomKeyStores(storeId, storeName, limit, marker, region);
+
+        ObjectNode response = objectMapper.createObjectNode();
+        ArrayNode array = response.putArray("CustomKeyStores");
+        for (KmsCustomKeyStore s : result.stores()) {
+            ObjectNode entry = array.addObject();
+            entry.put("CustomKeyStoreId", s.getCustomKeyStoreId());
+            entry.put("CustomKeyStoreName", s.getCustomKeyStoreName());
+            entry.put("CustomKeyStoreType", s.getCustomKeyStoreType());
+            entry.put("CloudHsmClusterId", s.getCloudHsmClusterId());
+            entry.put("TrustAnchorCertificate", s.getTrustAnchorCertificate());
+            entry.put("ConnectionState", s.getConnectionState());
+            entry.put("CreationDate", s.getCreationDate());
+            if (s.getConnectionErrorCode() != null) {
+                entry.put("ConnectionErrorCode", s.getConnectionErrorCode());
+            }
+        }
+        if (result.nextMarker() != null) {
+            response.put("NextMarker", result.nextMarker());
+        }
+        response.put("Truncated", result.truncated());
+        return Response.ok(response).build();
+    }
+
+    private Response handleUpdateCustomKeyStore(JsonNode request, String region) {
+        String storeId = request.path("CustomKeyStoreId").asText();
+        String newName = request.path("NewCustomKeyStoreName").isMissingNode()
+                ? null : request.path("NewCustomKeyStoreName").asText(null);
+        String clusterId = request.path("CloudHsmClusterId").isMissingNode()
+                ? null : request.path("CloudHsmClusterId").asText(null);
+        String cert = request.path("TrustAnchorCertificate").isMissingNode()
+                ? null : request.path("TrustAnchorCertificate").asText(null);
+        String password = request.path("KeyStorePassword").isMissingNode()
+                ? null : request.path("KeyStorePassword").asText(null);
+
+        service.updateCustomKeyStore(storeId, newName, clusterId, cert, password, region);
+        return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
+    private Response handleConnectCustomKeyStore(JsonNode request, String region) {
+        String storeId = request.path("CustomKeyStoreId").asText();
+        service.connectCustomKeyStore(storeId, region);
+        return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
+    private Response handleDisconnectCustomKeyStore(JsonNode request, String region) {
+        String storeId = request.path("CustomKeyStoreId").asText();
+        service.disconnectCustomKeyStore(storeId, region);
+        return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
+    private Response handleDeleteCustomKeyStore(JsonNode request, String region) {
+        String storeId = request.path("CustomKeyStoreId").asText();
+        service.deleteCustomKeyStore(storeId, region);
+        return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
     private Response handleGenerateRandom(JsonNode request, String region) {
         if (!request.path("Recipient").isMissingNode()) {
             throw new AwsException("ValidationException",
                     "Recipient is not supported for GenerateRandom without Nitro Enclave support.",
                     400);
         }
-        if (!request.path("CustomKeyStoreId").isMissingNode()) {
-            throw new AwsException("ValidationException",
-                    "Custom key stores are not supported.",
-                    400);
-        }
+        String customKeyStoreId = request.path("CustomKeyStoreId").isMissingNode()
+                ? null : request.path("CustomKeyStoreId").asText(null);
         int numberOfBytes = request.path("NumberOfBytes").asInt(0);
-        byte[] randomBytes = service.generateRandom(numberOfBytes);
+        byte[] randomBytes = service.generateRandom(numberOfBytes, customKeyStoreId, region);
         ObjectNode response = objectMapper.createObjectNode();
         response.put("Plaintext", Base64.getEncoder().encodeToString(randomBytes));
         return Response.ok(response).build();
@@ -421,7 +505,11 @@ public class KmsJsonHandler {
         node.put("Description", k.getDescription());
         node.put("KeyUsage", k.getKeyUsage());
         node.put("KeyState", k.getKeyState());
-        node.put("Origin", "AWS_KMS");
+        String origin = k.getOrigin();
+        node.put("Origin", origin != null ? origin : "AWS_KMS");
+        if (k.getCustomKeyStoreId() != null) {
+            node.put("CustomKeyStoreId", k.getCustomKeyStoreId());
+        }
         node.put("KeyManager", "CUSTOMER");
         node.put("CustomerMasterKeySpec", k.getCustomerMasterKeySpec());
         node.put("KeySpec", k.getCustomerMasterKeySpec());

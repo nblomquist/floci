@@ -24,6 +24,8 @@ public class KmsKey {
     private Map<String, String> tags = new HashMap<>();
     private String privateKeyEncoded;
     private String publicKeyEncoded;
+    private String origin = "AWS_KMS";
+    private String customKeyStoreId;
 
     public KmsKey() {
         this.creationDate = Instant.now().getEpochSecond();
@@ -70,4 +72,10 @@ public class KmsKey {
 
     public String getPublicKeyEncoded() { return publicKeyEncoded; }
     public void setPublicKeyEncoded(String publicKeyEncoded) { this.publicKeyEncoded = publicKeyEncoded; }
+
+    public String getOrigin() { return origin; }
+    public void setOrigin(String origin) { this.origin = origin; }
+
+    public String getCustomKeyStoreId() { return customKeyStoreId; }
+    public void setCustomKeyStoreId(String customKeyStoreId) { this.customKeyStoreId = customKeyStoreId; }
 }

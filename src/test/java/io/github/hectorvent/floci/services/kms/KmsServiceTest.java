@@ -5,6 +5,7 @@ import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.common.ReservedTags;
 import io.github.hectorvent.floci.core.storage.InMemoryStorage;
 import io.github.hectorvent.floci.services.kms.model.KmsAlias;
+import io.github.hectorvent.floci.services.kms.model.KmsCustomKeyStore;
 import io.github.hectorvent.floci.services.kms.model.KmsKey;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.junit.jupiter.api.BeforeAll;
@@ -31,6 +32,7 @@ class KmsServiceTest {
     private static final String REGION = "us-east-1";
 
     private KmsService kmsService;
+    private InMemoryStorage<String, KmsKey> keyStore;
 
     @BeforeAll
     static void registerBouncyCastle() {
@@ -41,7 +43,9 @@ class KmsServiceTest {
 
     @BeforeEach
     void setUp() {
+        keyStore = new InMemoryStorage<>();
         kmsService = new KmsService(
+                keyStore,
                 new InMemoryStorage<>(),
                 new InMemoryStorage<>(),
                 new RegionResolver("us-east-1", "000000000000")
@@ -799,6 +803,349 @@ class KmsServiceTest {
 
         assertEquals("ValidationException", empty.getErrorCode());
         assertEquals("ValidationException", oversized.getErrorCode());
+    }
+
+    // ──────────────────────────── Custom Key Stores ────────────────────────────
+
+    @Test
+    void createCustomKeyStore_returnsConnectedStoreWithValidId() {
+        KmsCustomKeyStore store = kmsService.createCustomKeyStore(
+                "my-test-store", "cluster-123", "cert-pem-data", "password123", REGION);
+
+        assertNotNull(store.getCustomKeyStoreId());
+        assertTrue(store.getCustomKeyStoreId().startsWith("cks-"));
+        assertEquals("my-test-store", store.getCustomKeyStoreName());
+        assertEquals("AWS_CLOUDHSM", store.getCustomKeyStoreType());
+        assertEquals("cluster-123", store.getCloudHsmClusterId());
+        assertEquals("CONNECTED", store.getConnectionState());
+    }
+
+    @Test
+    void createCustomKeyStore_rejectsDuplicateName() {
+        kmsService.createCustomKeyStore("dup-name", "cluster-1", "cert1", "pw1", REGION);
+
+        AwsException ex = assertThrows(AwsException.class, () ->
+                kmsService.createCustomKeyStore("dup-name", "cluster-2", "cert2", "pw2", REGION));
+        assertEquals("AlreadyExistsException", ex.getErrorCode());
+    }
+
+    @Test
+    void createCustomKeyStore_rejectsMissingRequiredParams() {
+        AwsException ex = assertThrows(AwsException.class, () ->
+                kmsService.createCustomKeyStore(null, "cluster", "cert", "pw", REGION));
+        assertEquals("ValidationException", ex.getErrorCode());
+    }
+
+    @Test
+    void createCustomKeyStore_allowsSameNameInDifferentRegion() {
+        kmsService.createCustomKeyStore("regional-name", "cluster-1", "cert1", "pw1", REGION);
+        // Should not throw — different region
+        KmsCustomKeyStore store = kmsService.createCustomKeyStore("regional-name", "cluster-2", "cert2", "pw2", "eu-west-1");
+        assertNotNull(store.getCustomKeyStoreId());
+    }
+
+    @Test
+    void describeCustomKeyStores_returnsAllStores() {
+        kmsService.createCustomKeyStore("store1", "cluster-1", "cert1", "pw1", REGION);
+        kmsService.createCustomKeyStore("store2", "cluster-2", "cert2", "pw2", REGION);
+
+        KmsService.DescribeCustomKeyStoresResult result = kmsService.describeCustomKeyStores(null, null, 0, null, REGION);
+        assertEquals(2, result.stores().size());
+        assertFalse(result.truncated());
+    }
+
+    @Test
+    void describeCustomKeyStores_filtersByStoreId() {
+        KmsCustomKeyStore created = kmsService.createCustomKeyStore("filter-me", "cluster-1", "cert1", "pw1", REGION);
+        kmsService.createCustomKeyStore("other", "cluster-2", "cert2", "pw2", REGION);
+
+        KmsService.DescribeCustomKeyStoresResult result = kmsService.describeCustomKeyStores(created.getCustomKeyStoreId(), null, 0, null, REGION);
+        assertEquals(1, result.stores().size());
+        assertEquals(created.getCustomKeyStoreId(), result.stores().get(0).getCustomKeyStoreId());
+    }
+
+    @Test
+    void describeCustomKeyStores_filtersByName() {
+        kmsService.createCustomKeyStore("target-store", "cluster-1", "cert1", "pw1", REGION);
+        kmsService.createCustomKeyStore("other", "cluster-2", "cert2", "pw2", REGION);
+
+        KmsService.DescribeCustomKeyStoresResult result = kmsService.describeCustomKeyStores(null, "target-store", 0, null, REGION);
+        assertEquals(1, result.stores().size());
+        assertEquals("target-store", result.stores().get(0).getCustomKeyStoreName());
+    }
+
+    @Test
+    void describeCustomKeyStores_returnsEmptyListWhenNoMatch() {
+        KmsService.DescribeCustomKeyStoresResult result = kmsService.describeCustomKeyStores("cks-nonexistent", null, 0, null, REGION);
+        assertTrue(result.stores().isEmpty());
+        assertFalse(result.truncated());
+    }
+
+    @Test
+    void updateCustomKeyStore_renamesInConnectedState() {
+        KmsCustomKeyStore created = kmsService.createCustomKeyStore("orig-name", "cluster-1", "cert1", "pw1", REGION);
+        kmsService.updateCustomKeyStore(created.getCustomKeyStoreId(), "new-name", null, null, null, REGION);
+
+        KmsService.DescribeCustomKeyStoresResult result = kmsService.describeCustomKeyStores(created.getCustomKeyStoreId(), null, 0, null, REGION);
+        assertEquals("new-name", result.stores().get(0).getCustomKeyStoreName());
+    }
+
+    @Test
+    void updateCustomKeyStore_throwsOnNonexistentStore() {
+        assertThrows(AwsException.class,
+                () -> kmsService.updateCustomKeyStore("cks-nonexistent", "name", null, null, null, REGION));
+    }
+
+    @Test
+    void updateCustomKeyStore_rejectsClusterChangeWhenConnected() {
+        KmsCustomKeyStore created = kmsService.createCustomKeyStore("connected-store", "cluster-1", "cert1", "pw1", REGION);
+        assertThrows(AwsException.class,
+                () -> kmsService.updateCustomKeyStore(created.getCustomKeyStoreId(), null, "cluster-2", null, null, REGION));
+    }
+
+    @Test
+    void updateCustomKeyStore_rejectsCertChangeWhenConnected() {
+        KmsCustomKeyStore created = kmsService.createCustomKeyStore("connected-store-2", "cluster-1", "cert1", "pw1", REGION);
+        assertThrows(AwsException.class,
+                () -> kmsService.updateCustomKeyStore(created.getCustomKeyStoreId(), null, null, "cert2", null, REGION));
+    }
+
+    @Test
+    void updateCustomKeyStore_rejectsPasswordChangeWhenConnected() {
+        KmsCustomKeyStore created = kmsService.createCustomKeyStore("connected-store-3", "cluster-1", "cert1", "pw1", REGION);
+        assertThrows(AwsException.class,
+                () -> kmsService.updateCustomKeyStore(created.getCustomKeyStoreId(), null, null, null, "pw2", REGION));
+    }
+
+    @Test
+    void updateCustomKeyStore_updatesClusterCertPasswordWhenDisconnected() {
+        KmsCustomKeyStore created = kmsService.createCustomKeyStore("will-be-disconnected", "cluster-1", "cert1", "pw1", REGION);
+        // Manually set to DISCONNECTED
+        kmsService.updateCustomKeyStoreConnectionState(created.getCustomKeyStoreId(), REGION, "DISCONNECTED");
+
+        kmsService.updateCustomKeyStore(created.getCustomKeyStoreId(), null, "cluster-2", "cert2", "pw2", REGION);
+
+        KmsService.DescribeCustomKeyStoresResult result = kmsService.describeCustomKeyStores(created.getCustomKeyStoreId(), null, 0, null, REGION);
+        KmsCustomKeyStore s = result.stores().get(0);
+        assertEquals("cluster-2", s.getCloudHsmClusterId());
+        assertEquals("cert2", s.getTrustAnchorCertificate());
+        // Password should have been updated (though not returned by Describe)
+    }
+
+    // ---- Phase 2: Connect, Disconnect, Delete ----
+
+    @Test
+    void connectCustomKeyStore_transitionsDisconnectedToConnected() {
+        KmsCustomKeyStore created = kmsService.createCustomKeyStore("test-store", "cluster-1", "cert1", "pw1", REGION);
+        kmsService.updateCustomKeyStoreConnectionState(created.getCustomKeyStoreId(), REGION, "DISCONNECTED");
+
+        kmsService.connectCustomKeyStore(created.getCustomKeyStoreId(), REGION);
+
+        KmsService.DescribeCustomKeyStoresResult result = kmsService.describeCustomKeyStores(created.getCustomKeyStoreId(), null, 0, null, REGION);
+        assertEquals("CONNECTED", result.stores().get(0).getConnectionState());
+    }
+
+    @Test
+    void connectCustomKeyStore_isIdempotentOnConnected() {
+        KmsCustomKeyStore created = kmsService.createCustomKeyStore("test-store-2", "cluster-1", "cert1", "pw1", REGION);
+
+        // Should not throw - already CONNECTED
+        kmsService.connectCustomKeyStore(created.getCustomKeyStoreId(), REGION);
+
+        KmsService.DescribeCustomKeyStoresResult result = kmsService.describeCustomKeyStores(created.getCustomKeyStoreId(), null, 0, null, REGION);
+        assertEquals("CONNECTED", result.stores().get(0).getConnectionState());
+    }
+
+    @Test
+    void connectCustomKeyStore_rejectsCreating() {
+        KmsCustomKeyStore created = kmsService.createCustomKeyStore("test-store-3", "cluster-1", "cert1", "pw1", REGION);
+        kmsService.updateCustomKeyStoreConnectionState(created.getCustomKeyStoreId(), REGION, "CREATING");
+
+        assertThrows(AwsException.class,
+                () -> kmsService.connectCustomKeyStore(created.getCustomKeyStoreId(), REGION));
+    }
+
+    @Test
+    void connectCustomKeyStore_throwsOnNonexistent() {
+        assertThrows(AwsException.class,
+                () -> kmsService.connectCustomKeyStore("cks-nonexistent", REGION));
+    }
+
+    @Test
+    void disconnectCustomKeyStore_transitionsConnectedToDisconnected() {
+        KmsCustomKeyStore created = kmsService.createCustomKeyStore("test-store-4", "cluster-1", "cert1", "pw1", REGION);
+
+        kmsService.disconnectCustomKeyStore(created.getCustomKeyStoreId(), REGION);
+
+        KmsService.DescribeCustomKeyStoresResult result = kmsService.describeCustomKeyStores(created.getCustomKeyStoreId(), null, 0, null, REGION);
+        assertEquals("DISCONNECTED", result.stores().get(0).getConnectionState());
+    }
+
+    @Test
+    void disconnectCustomKeyStore_isIdempotentOnDisconnected() {
+        KmsCustomKeyStore created = kmsService.createCustomKeyStore("test-store-5", "cluster-1", "cert1", "pw1", REGION);
+        kmsService.updateCustomKeyStoreConnectionState(created.getCustomKeyStoreId(), REGION, "DISCONNECTED");
+
+        kmsService.disconnectCustomKeyStore(created.getCustomKeyStoreId(), REGION);
+
+        KmsService.DescribeCustomKeyStoresResult result = kmsService.describeCustomKeyStores(created.getCustomKeyStoreId(), null, 0, null, REGION);
+        assertEquals("DISCONNECTED", result.stores().get(0).getConnectionState());
+    }
+
+    @Test
+    void disconnectCustomKeyStore_rejectsCreating() {
+        KmsCustomKeyStore created = kmsService.createCustomKeyStore("test-store-6", "cluster-1", "cert1", "pw1", REGION);
+        kmsService.updateCustomKeyStoreConnectionState(created.getCustomKeyStoreId(), REGION, "CREATING");
+
+        assertThrows(AwsException.class,
+                () -> kmsService.disconnectCustomKeyStore(created.getCustomKeyStoreId(), REGION));
+    }
+
+    @Test
+    void disconnectCustomKeyStore_throwsOnNonexistent() {
+        assertThrows(AwsException.class,
+                () -> kmsService.disconnectCustomKeyStore("cks-nonexistent", REGION));
+    }
+
+    @Test
+    void deleteCustomKeyStore_deletesDisconnectedStore() {
+        KmsCustomKeyStore created = kmsService.createCustomKeyStore("delete-me", "cluster-1", "cert1", "pw1", REGION);
+        kmsService.updateCustomKeyStoreConnectionState(created.getCustomKeyStoreId(), REGION, "DISCONNECTED");
+
+        kmsService.deleteCustomKeyStore(created.getCustomKeyStoreId(), REGION);
+
+        // Verify it's gone
+        KmsService.DescribeCustomKeyStoresResult result = kmsService.describeCustomKeyStores(created.getCustomKeyStoreId(), null, 0, null, REGION);
+        assertTrue(result.stores().isEmpty());
+    }
+
+    @Test
+    void deleteCustomKeyStore_throwsOnConnectedStore() {
+        KmsCustomKeyStore created = kmsService.createCustomKeyStore("connected-delete", "cluster-1", "cert1", "pw1", REGION);
+
+        assertThrows(AwsException.class,
+                () -> kmsService.deleteCustomKeyStore(created.getCustomKeyStoreId(), REGION));
+    }
+
+    @Test
+    void deleteCustomKeyStore_throwsOnStoreWithReferencingKeys() {
+        KmsCustomKeyStore created = kmsService.createCustomKeyStore("has-keys", "cluster-1", "cert1", "pw1", REGION);
+        kmsService.updateCustomKeyStoreConnectionState(created.getCustomKeyStoreId(), REGION, "DISCONNECTED");
+
+        // Create a key and set its customKeyStoreId to reference the store
+        KmsKey key = kmsService.createKey("key-for-store", REGION);
+        String fullKey = REGION + "::" + key.getKeyId();
+        key.setCustomKeyStoreId(created.getCustomKeyStoreId());
+        keyStore.put(fullKey, key);
+
+        AwsException ex = assertThrows(AwsException.class,
+                () -> kmsService.deleteCustomKeyStore(created.getCustomKeyStoreId(), REGION));
+        assertEquals("CustomKeyStoreHasCMKsException", ex.getErrorCode());
+    }
+
+    @Test
+    void deleteCustomKeyStore_throwsOnNonexistent() {
+        assertThrows(AwsException.class,
+                () -> kmsService.deleteCustomKeyStore("cks-nonexistent", REGION));
+    }
+
+    @Test
+    void deleteCustomKeyStore_allowsDeleteWhenKeysUnrelated() {
+        KmsCustomKeyStore created = kmsService.createCustomKeyStore("unrelated-keys", "cluster-1", "cert1", "pw1", REGION);
+        kmsService.updateCustomKeyStoreConnectionState(created.getCustomKeyStoreId(), REGION, "DISCONNECTED");
+
+        // Create a key WITHOUT setting customKeyStoreId (default null)
+        kmsService.createKey("unrelated-key", REGION);
+
+        // Should succeed — key doesn't reference this store
+        kmsService.deleteCustomKeyStore(created.getCustomKeyStoreId(), REGION);
+
+        KmsService.DescribeCustomKeyStoresResult result = kmsService.describeCustomKeyStores(created.getCustomKeyStoreId(), null, 0, null, REGION);
+        assertTrue(result.stores().isEmpty());
+    }
+
+    // ---- Phase 3: CreateKey origin, DescribeKey metadata, GenerateRandom ----
+
+
+    @Test
+    void createKey_defaultsToAwsKmsOrigin() {
+        KmsKey key = kmsService.createKey("default-origin", REGION);
+        assertEquals("AWS_KMS", key.getOrigin());
+        assertNull(key.getCustomKeyStoreId());
+    }
+
+    @Test
+    void createKey_withCloudHsmOriginSetsOriginAndStoreId() {
+        KmsCustomKeyStore store = kmsService.createCustomKeyStore("cks-for-createkey", "cluster-1", "cert1", "pw1", REGION);
+
+        KmsKey key = kmsService.createKey("cloudhsm-key", "ENCRYPT_DECRYPT", "SYMMETRIC_DEFAULT",
+                null, Map.of(), "AWS_CLOUDHSM", store.getCustomKeyStoreId(), REGION);
+
+        assertEquals("AWS_CLOUDHSM", key.getOrigin());
+        assertEquals(store.getCustomKeyStoreId(), key.getCustomKeyStoreId());
+    }
+
+    @Test
+    void createKey_withCloudHsmOriginThrowsOnMissingStore() {
+        assertThrows(AwsException.class,
+                () -> kmsService.createKey("bad-store", "ENCRYPT_DECRYPT", "SYMMETRIC_DEFAULT",
+                        null, Map.of(), "AWS_CLOUDHSM", "cks-nonexistent", REGION));
+    }
+
+    @Test
+    void createKey_withCloudHsmOriginThrowsOnDisconnectedStore() {
+        KmsCustomKeyStore store = kmsService.createCustomKeyStore("disconnected-cks", "cluster-1", "cert1", "pw1", REGION);
+        kmsService.updateCustomKeyStoreConnectionState(store.getCustomKeyStoreId(), REGION, "DISCONNECTED");
+
+        assertThrows(AwsException.class,
+                () -> kmsService.createKey("disconnected-store-key", "ENCRYPT_DECRYPT", "SYMMETRIC_DEFAULT",
+                        null, Map.of(), "AWS_CLOUDHSM", store.getCustomKeyStoreId(), REGION));
+    }
+
+    @Test
+    void createKey_withCloudHsmOriginThrowsOnMissingCustomKeyStoreId() {
+        assertThrows(AwsException.class,
+                () -> kmsService.createKey("no-store-id", "ENCRYPT_DECRYPT", "SYMMETRIC_DEFAULT",
+                        null, Map.of(), "AWS_CLOUDHSM", null, REGION));
+    }
+
+    @Test
+    void describeKey_returnsCloudHsmOriginAndCustomKeyStoreId() {
+        KmsCustomKeyStore store = kmsService.createCustomKeyStore("describe-cks", "cluster-1", "cert1", "pw1", REGION);
+        KmsKey created = kmsService.createKey("describe-test", "ENCRYPT_DECRYPT", "SYMMETRIC_DEFAULT",
+                null, Map.of(), "AWS_CLOUDHSM", store.getCustomKeyStoreId(), REGION);
+
+        KmsKey described = kmsService.describeKey(created.getKeyId(), REGION);
+        assertEquals("AWS_CLOUDHSM", described.getOrigin());
+        assertEquals(store.getCustomKeyStoreId(), described.getCustomKeyStoreId());
+    }
+
+    @Test
+    void describeKey_defaultsCustomKeyStoreIdToNull() {
+        KmsKey created = kmsService.createKey("no-cks", REGION);
+        KmsKey described = kmsService.describeKey(created.getKeyId(), REGION);
+        assertEquals("AWS_KMS", described.getOrigin());
+        assertNull(described.getCustomKeyStoreId());
+    }
+
+    @Test
+    void generateRandom_withValidCustomKeyStoreIdReturnsBytes() {
+        KmsCustomKeyStore store = kmsService.createCustomKeyStore("random-cks", "cluster-1", "cert1", "pw1", REGION);
+
+        byte[] random = kmsService.generateRandom(32, store.getCustomKeyStoreId(), REGION);
+        assertEquals(32, random.length);
+    }
+
+    @Test
+    void generateRandom_withInvalidCustomKeyStoreIdThrows() {
+        assertThrows(AwsException.class,
+                () -> kmsService.generateRandom(32, "cks-nonexistent", REGION));
+    }
+
+    @Test
+    void generateRandom_withoutCustomKeyStoreIdStillWorks() {
+        byte[] random = kmsService.generateRandom(16, null, REGION);
+        assertEquals(16, random.length);
     }
 
     private static int expectedMacByteLength(String spec) {
