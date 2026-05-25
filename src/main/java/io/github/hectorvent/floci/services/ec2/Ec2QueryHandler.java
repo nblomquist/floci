@@ -1116,7 +1116,8 @@ public class Ec2QueryHandler {
 
     private Response handleDescribeNetworkInterfaces(MultivaluedMap<String, String> p, String region) {
         List<String> ids = getList(p, "NetworkInterfaceId");
-        List<NetworkInterface> nis = service.describeNetworkInterfaces(region, ids);
+        Map<String, List<String>> filters = getFilters(p);
+        List<NetworkInterface> nis = service.describeNetworkInterfaces(region, ids, filters);
         XmlBuilder xml = new XmlBuilder()
                 .start("DescribeNetworkInterfacesResponse", AwsNamespaces.EC2)
                 .elem("requestId", UUID.randomUUID().toString())

@@ -917,6 +917,112 @@ class Ec2IntegrationTest {
     }
 
     // =========================================================================
+    // Network Interfaces — Filter tests (Phase 4)
+    // =========================================================================
+
+    @Test
+    @Order(92)
+    void describeNetworkInterfacesFilterBySubnetId() {
+        given()
+            .formParam("Action", "DescribeNetworkInterfaces")
+            .formParam("Filter.1.Name", "subnet-id")
+            .formParam("Filter.1.Value.1", subnetId)
+            .header("Authorization", AUTH_HEADER)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("DescribeNetworkInterfacesResponse.networkInterfaceSet.item.size()",
+                    greaterThanOrEqualTo(1))
+            .body("DescribeNetworkInterfacesResponse.networkInterfaceSet.item[0].subnetId",
+                    equalTo(subnetId));
+    }
+
+    @Test
+    @Order(92)
+    void describeNetworkInterfacesFilterByVpcId() {
+        given()
+            .formParam("Action", "DescribeNetworkInterfaces")
+            .formParam("Filter.1.Name", "vpc-id")
+            .formParam("Filter.1.Value.1", vpcId)
+            .header("Authorization", AUTH_HEADER)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("DescribeNetworkInterfacesResponse.networkInterfaceSet.item.size()",
+                    greaterThanOrEqualTo(1))
+            .body("DescribeNetworkInterfacesResponse.networkInterfaceSet.item[0].vpcId",
+                    equalTo(vpcId));
+    }
+
+    @Test
+    @Order(92)
+    void describeNetworkInterfacesFilterByGroupId() {
+        given()
+            .formParam("Action", "DescribeNetworkInterfaces")
+            .formParam("Filter.1.Name", "group-id")
+            .formParam("Filter.1.Value.1", securityGroupId)
+            .header("Authorization", AUTH_HEADER)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("DescribeNetworkInterfacesResponse.networkInterfaceSet.item.size()",
+                    greaterThanOrEqualTo(1));
+    }
+
+    @Test
+    @Order(92)
+    void describeNetworkInterfacesFilterByStatus() {
+        given()
+            .formParam("Action", "DescribeNetworkInterfaces")
+            .formParam("Filter.1.Name", "status")
+            .formParam("Filter.1.Value.1", "in-use")
+            .header("Authorization", AUTH_HEADER)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("DescribeNetworkInterfacesResponse.networkInterfaceSet.item.size()",
+                    greaterThanOrEqualTo(1))
+            .body("DescribeNetworkInterfacesResponse.networkInterfaceSet.item[0].status",
+                    equalTo("in-use"));
+    }
+
+    @Test
+    @Order(92)
+    void describeNetworkInterfacesFilterByTag() {
+        given()
+            .formParam("Action", "DescribeNetworkInterfaces")
+            .formParam("Filter.1.Name", "tag:Name")
+            .formParam("Filter.1.Value.1", "test-instance")
+            .header("Authorization", AUTH_HEADER)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("DescribeNetworkInterfacesResponse.networkInterfaceSet.item.size()",
+                    greaterThanOrEqualTo(1));
+    }
+
+    @Test
+    @Order(92)
+    void describeNetworkInterfacesFilterNoMatch() {
+        given()
+            .formParam("Action", "DescribeNetworkInterfaces")
+            .formParam("Filter.1.Name", "status")
+            .formParam("Filter.1.Value.1", "available")
+            .header("Authorization", AUTH_HEADER)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("DescribeNetworkInterfacesResponse.networkInterfaceSet.item.size()",
+                    equalTo(0));
+    }
+
+    // =========================================================================
     // Volumes
     // =========================================================================
 

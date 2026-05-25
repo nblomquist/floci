@@ -1414,6 +1414,25 @@ public class Ec2Service {
                 default -> true;
             };
         }
+        if (resource instanceof NetworkInterface ni) {
+            return switch (filterName) {
+                case "network-interface-id" -> matchesValue(values, ni.getNetworkInterfaceId());
+                case "subnet-id" -> matchesValue(values, ni.getSubnetId());
+                case "vpc-id" -> matchesValue(values, ni.getVpcId());
+                case "group-id" -> ni.getGroups().stream()
+                        .anyMatch(g -> matchesValue(values, g.getGroupId()));
+                case "status" -> matchesValue(values, ni.getStatus());
+                case "private-ip-address" ->
+                    matchesValue(values, ni.getPrivateIpAddress()) ||
+                    ni.getPrivateIpAddresses().stream()
+                        .anyMatch(ip -> matchesValue(values, ip.getPrivateIpAddress()));
+                case "description" -> matchesValue(values, ni.getDescription());
+                case "owner-id" -> matchesValue(values, ni.getOwnerId());
+                case "mac-address" -> matchesValue(values, ni.getMacAddress());
+                case "private-dns-name" -> matchesValue(values, ni.getPrivateDnsName());
+                default -> true;
+            };
+        }
         return true;
     }
 
@@ -1428,6 +1447,7 @@ public class Ec2Service {
         if (resource instanceof KeyPair kp) return kp.getTags();
         if (resource instanceof Address addr) return addr.getTags();
         if (resource instanceof Volume vol) return vol.getTags();
+        if (resource instanceof NetworkInterface ni) return ni.getTagSet();
         return Collections.emptyList();
     }
 
@@ -1480,7 +1500,8 @@ public class Ec2Service {
 
     // ─── Network Interfaces ─────────────────────────────────────────────────────
 
-    public List<NetworkInterface> describeNetworkInterfaces(String region, List<String> networkInterfaceIds) {
+    public List<NetworkInterface> describeNetworkInterfaces(String region, List<String> networkInterfaceIds,
+                                                              Map<String, List<String>> filters) {
         ensureDefaultResources(region);
         List<NetworkInterface> result = new ArrayList<>();
         for (Instance inst : instances.values()) {
@@ -1536,6 +1557,11 @@ public class Ec2Service {
                     primaryIp.setAssociation(assoc);
                 });
                 ni.getPrivateIpAddresses().add(primaryIp);
+
+                // Phase 4: apply filters
+                if (!matchesFilters(ni, filters, region)) {
+                    continue;
+                }
 
                 result.add(ni);
             }
