@@ -1041,7 +1041,7 @@ class Ec2IntegrationTest {
             .post("/")
         .then()
             .statusCode(400)
-            .body("Response.Errors.Error.Code", equalTo("InvalidParameterValue"));
+            .body("Response.Errors.Error.Code", equalTo("InvalidMaxResults"));
     }
 
     @Test
@@ -1055,7 +1055,21 @@ class Ec2IntegrationTest {
             .post("/")
         .then()
             .statusCode(400)
-            .body("Response.Errors.Error.Code", equalTo("InvalidParameterValue"));
+            .body("Response.Errors.Error.Code", equalTo("InvalidMaxResults"));
+    }
+
+    @Test
+    @Order(92)
+    void describeNetworkInterfacesMaxResultsNonNumeric() {
+        given()
+            .formParam("Action", "DescribeNetworkInterfaces")
+            .formParam("MaxResults", "abc")
+            .header("Authorization", AUTH_HEADER)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(400)
+            .body("Response.Errors.Error.Code", equalTo("InvalidMaxResults"));
     }
 
     @Test

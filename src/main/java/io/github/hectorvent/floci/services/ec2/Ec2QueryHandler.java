@@ -2,7 +2,6 @@ package io.github.hectorvent.floci.services.ec2;
 
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.AwsNamespaces;
-import io.github.hectorvent.floci.core.common.AwsQueryResponse;
 import io.github.hectorvent.floci.core.common.XmlBuilder;
 import io.github.hectorvent.floci.services.ec2.model.*;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -162,7 +161,8 @@ public class Ec2QueryHandler {
         try {
             return Integer.parseInt(val);
         } catch (NumberFormatException e) {
-            return defaultValue;
+            throw new AwsException("InvalidMaxResults",
+                    "The specified value for MaxResults is not valid.", 400);
         }
     }
 

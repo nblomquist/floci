@@ -1513,7 +1513,7 @@ public class Ec2Service {
                     "The parameter NetworkInterfaceId cannot be used with the parameter MaxResults.", 400);
         }
         if (maxResults > 0 && (maxResults < 5 || maxResults > 1000)) {
-            throw new AwsException("InvalidParameterValue",
+            throw new AwsException("InvalidMaxResults",
                     "Value (" + maxResults + ") for parameter MaxResults is invalid. "
                             + "Expecting a value between 5 and 1000.", 400);
         }
