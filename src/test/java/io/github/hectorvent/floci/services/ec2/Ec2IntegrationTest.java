@@ -3,8 +3,12 @@ package io.github.hectorvent.floci.services.ec2;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.greaterThanOrEqualTo;
+import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.startsWith;
+import static org.hamcrest.Matchers.containsString;
+
+import java.util.List;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
@@ -1020,6 +1024,195 @@ class Ec2IntegrationTest {
             .statusCode(200)
             .body("DescribeNetworkInterfacesResponse.networkInterfaceSet.item.size()",
                     equalTo(0));
+    }
+
+    // =========================================================================
+    // Network Interfaces — Pagination (Phase 5)
+    // =========================================================================
+
+    @Test
+    @Order(92)
+    void describeNetworkInterfacesMaxResultsTooLow() {
+        given()
+            .formParam("Action", "DescribeNetworkInterfaces")
+            .formParam("MaxResults", "4")
+            .header("Authorization", AUTH_HEADER)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(400)
+            .body("Response.Errors.Error.Code", equalTo("InvalidParameterValue"));
+    }
+
+    @Test
+    @Order(92)
+    void describeNetworkInterfacesMaxResultsTooHigh() {
+        given()
+            .formParam("Action", "DescribeNetworkInterfaces")
+            .formParam("MaxResults", "1001")
+            .header("Authorization", AUTH_HEADER)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(400)
+            .body("Response.Errors.Error.Code", equalTo("InvalidParameterValue"));
+    }
+
+    @Test
+    @Order(92)
+    void describeNetworkInterfacesMaxResultsWithNetworkInterfaceId() {
+        given()
+            .formParam("Action", "DescribeNetworkInterfaces")
+            .formParam("NetworkInterfaceId.1", networkInterfaceId)
+            .formParam("MaxResults", "5")
+            .header("Authorization", AUTH_HEADER)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(400)
+            .body("Response.Errors.Error.Code", equalTo("InvalidParameterCombination"));
+    }
+
+    @Test
+    @Order(92)
+    void describeNetworkInterfacesInvalidNextToken() {
+        given()
+            .formParam("Action", "DescribeNetworkInterfaces")
+            .formParam("NextToken", "invalid-token")
+            .header("Authorization", AUTH_HEADER)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(400)
+            .body("Response.Errors.Error.Code", equalTo("InvalidParameterValue"));
+    }
+
+    @Test
+    @Order(92)
+    void describeNetworkInterfacesWithMaxResultsNoNextToken() {
+        // When MaxResults exceeds the number of available ENIs,
+        // all results are returned and nextToken is omitted.
+        // This test works regardless of how many instances exist
+        // (including zero, e.g. when run in isolation).
+        String body = given()
+            .formParam("Action", "DescribeNetworkInterfaces")
+            .formParam("MaxResults", "5")
+            .header("Authorization", AUTH_HEADER)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+        .extract().body().asString();
+
+        org.hamcrest.MatcherAssert.assertThat(body, not(containsString("<nextToken>")));
+    }
+
+    // =========================================================================
+    // Network Interfaces — Error Handling (Phase 6)
+    // =========================================================================
+
+    @Test
+    @Order(92)
+    void describeNetworkInterfacesNotFound() {
+        given()
+            .formParam("Action", "DescribeNetworkInterfaces")
+            .formParam("NetworkInterfaceId.1", "eni-0000000000000dead")
+            .header("Authorization", AUTH_HEADER)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(400)
+            .body("Response.Errors.Error.Code", equalTo("InvalidNetworkInterfaceID.NotFound"));
+    }
+
+    @Test
+    @Order(92)
+    void describeNetworkInterfacesMalformed() {
+        given()
+            .formParam("Action", "DescribeNetworkInterfaces")
+            .formParam("NetworkInterfaceId.1", "not-an-eni-id")
+            .header("Authorization", AUTH_HEADER)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(400)
+            .body("Response.Errors.Error.Code", equalTo("InvalidNetworkInterfaceID.Malformed"));
+    }
+
+    // =========================================================================
+    // Network Interfaces — Multipage Pagination (Phase 5 completion)
+    // =========================================================================
+    //
+    // Self-contained test: launches additional instances, tests full
+    // pagination cycle (MaxResults truncation + NextToken continuation),
+    // then terminates the extra instances. Does not affect other tests.
+
+    @Test
+    @Order(92)
+    void describeNetworkInterfacesMultipagePagination() {
+        // ── Launch 5 additional instances to have 6 total ENIs ──
+        List<String> batchIds = given()
+            .formParam("Action", "RunInstances")
+            .formParam("ImageId", "ami-0abcdef1234567890")
+            .formParam("InstanceType", "t2.micro")
+            .formParam("MinCount", "5")
+            .formParam("MaxCount", "5")
+            .formParam("KeyName", "test-key")
+            .formParam("SubnetId", subnetId)
+            .formParam("SecurityGroupId.1", securityGroupId)
+            .header("Authorization", AUTH_HEADER)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+        .extract().xmlPath().getList("RunInstancesResponse.instancesSet.item.instanceId", String.class);
+
+        assert batchIds.size() == 5 : "Expected 5 new instances, got " + batchIds.size();
+
+        // ── Page 1: MaxResults=5, expect 5 ENIs + nextToken ──
+        String nextToken = given()
+            .formParam("Action", "DescribeNetworkInterfaces")
+            .formParam("MaxResults", "5")
+            .header("Authorization", AUTH_HEADER)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("DescribeNetworkInterfacesResponse.networkInterfaceSet.item.size()", equalTo(5))
+            .body("DescribeNetworkInterfacesResponse.nextToken", notNullValue())
+        .extract().path("DescribeNetworkInterfacesResponse.nextToken");
+
+        assert nextToken != null && !nextToken.isEmpty() : "Expected non-empty nextToken on truncated page";
+
+        // ── Page 2: use NextToken, expect remaining ENIs, no nextToken ──
+        String body = given()
+            .formParam("Action", "DescribeNetworkInterfaces")
+            .formParam("MaxResults", "5")
+            .formParam("NextToken", nextToken)
+            .header("Authorization", AUTH_HEADER)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body("DescribeNetworkInterfacesResponse.networkInterfaceSet.item.size()",
+                    org.hamcrest.Matchers.greaterThanOrEqualTo(1))
+        .extract().body().asString();
+
+        // Final page must NOT contain a nextToken element
+        org.hamcrest.MatcherAssert.assertThat(body,
+                not(containsString("<nextToken>")));
+
+        // ── Cleanup: terminate the 5 extra instances ──
+        for (String id : batchIds) {
+            given()
+                .formParam("Action", "TerminateInstances")
+                .formParam("InstanceId.1", id)
+                .header("Authorization", AUTH_HEADER)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(200);
+        }
     }
 
     // =========================================================================
