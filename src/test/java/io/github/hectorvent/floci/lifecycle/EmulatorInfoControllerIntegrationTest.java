@@ -5,7 +5,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.quarkus.test.junit.QuarkusTest;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
-import org.junit.jupiter.api.Test;
 
 import java.util.List;
 
@@ -24,7 +23,7 @@ class EmulatorInfoControllerIntegrationTest {
     private static final List<String> CORE_SERVICES = List.of(
             "ssm", "sqs", "s3", "dynamodb", "sns", "lambda",
             "apigateway", "iam", "kafka", "elasticache", "rds",
-            "events", "scheduler", "logs", "monitoring", "secretsmanager",
+            "docdb", "events", "scheduler", "logs", "monitoring", "secretsmanager",
             "apigatewayv2", "kinesis", "kms", "cognito-idp", "states",
             "cloudformation", "acm", "athena", "glue", "firehose",
             "email", "es", "ec2", "ecs", "appconfig", "appconfigdata",

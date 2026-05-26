@@ -276,6 +276,7 @@ public interface EmulatorConfig {
         MskServiceConfig msk();
         ElastiCacheServiceConfig elasticache();
         RdsServiceConfig rds();
+        DocDbServiceConfig docdb();
         EventBridgeServiceConfig eventbridge();
         SchedulerServiceConfig scheduler();
         CloudWatchLogsServiceConfig cloudwatchlogs();
@@ -478,6 +479,11 @@ public interface EmulatorConfig {
 
         /** Docker network to attach DB containers to. Empty = default bridge. */
         Optional<String> dockerNetwork();
+    }
+
+    interface DocDbServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
     }
 
     interface NeptuneServiceConfig {

@@ -91,6 +91,21 @@ class ServiceEnablementIntegrationTest {
     }
 
     @Test
+    void docDbQueryRequestsReturnXmlWhenServiceDisabled() {
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .header("Authorization", authorization("docdb"))
+            .formParam("Action", "CreateDBCluster")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(400)
+            .contentType("application/xml")
+            .body(containsString("<Code>ServiceNotAvailableException</Code>"))
+            .body(containsString("<Message>Service docdb is not enabled.</Message>"));
+    }
+
+    @Test
     void dynamodbTargetedCborRequestsReturnCborErrors() throws Exception {
         JsonNode body = cborBody(
                 given()
@@ -174,6 +189,7 @@ class ServiceEnablementIntegrationTest {
                     "floci.services.ecs.enabled", "false",
                     "floci.services.lambda.enabled", "false",
                     "floci.services.opensearch.enabled", "false",
+                    "floci.services.docdb.enabled", "false",
                     "floci.services.sqs.enabled", "false"
             );
         }

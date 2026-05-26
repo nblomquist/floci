@@ -8,6 +8,7 @@ import io.github.hectorvent.floci.services.ec2.Ec2QueryHandler;
 import io.github.hectorvent.floci.services.elbv2.ElbV2QueryHandler;
 import io.github.hectorvent.floci.services.cloudwatch.metrics.CloudWatchMetricsQueryHandler;
 import io.github.hectorvent.floci.services.cognito.CognitoJsonHandler;
+import io.github.hectorvent.floci.services.docdb.DocDbQueryHandler;
 import io.github.hectorvent.floci.services.elasticache.ElastiCacheQueryHandler;
 import io.github.hectorvent.floci.services.iam.IamQueryHandler;
 import io.github.hectorvent.floci.services.iam.StsQueryHandler;
@@ -164,6 +165,7 @@ public class AwsQueryController {
     private final CloudFormationQueryHandler cloudFormationQueryHandler;
     private final ElastiCacheQueryHandler elastiCacheQueryHandler;
     private final RdsQueryHandler rdsQueryHandler;
+    private final DocDbQueryHandler docDbQueryHandler;
     private final NeptuneQueryHandler neptuneQueryHandler;
     private final NeptuneService neptuneService;
     private final SqsQueryHandler sqsQueryHandler;
@@ -181,9 +183,10 @@ public class AwsQueryController {
 
     @Inject
     public AwsQueryController(CloudFormationQueryHandler cloudFormationQueryHandler,
-                              ElastiCacheQueryHandler elastiCacheQueryHandler,
-                              RdsQueryHandler rdsQueryHandler,
-                              NeptuneQueryHandler neptuneQueryHandler,
+                               ElastiCacheQueryHandler elastiCacheQueryHandler,
+                               RdsQueryHandler rdsQueryHandler,
+                               DocDbQueryHandler docDbQueryHandler,
+                               NeptuneQueryHandler neptuneQueryHandler,
                               NeptuneService neptuneService,
                               SqsQueryHandler sqsQueryHandler, SnsQueryHandler snsQueryHandler,
                               SesQueryHandler sesQueryHandler,
@@ -198,6 +201,7 @@ public class AwsQueryController {
         this.cloudFormationQueryHandler = cloudFormationQueryHandler;
         this.elastiCacheQueryHandler = elastiCacheQueryHandler;
         this.rdsQueryHandler = rdsQueryHandler;
+        this.docDbQueryHandler = docDbQueryHandler;
         this.neptuneQueryHandler = neptuneQueryHandler;
         this.neptuneService = neptuneService;
         this.sqsQueryHandler = sqsQueryHandler;
@@ -250,8 +254,12 @@ public class AwsQueryController {
                         || neptuneService.hasInstance(instanceId)) {
                     yield neptuneQueryHandler.handle(action, formParams);
                 }
+                if ("docdb".equalsIgnoreCase(engine)) {
+                    yield docDbQueryHandler.handle(action, formParams);
+                }
                 yield rdsQueryHandler.handle(action, formParams);
             }
+            case "docdb" -> docDbQueryHandler.handle(action, formParams);
             case "neptune" -> neptuneQueryHandler.handle(action, formParams);
             case "email" -> sesQueryHandler.handle(action, formParams, region);
             case "monitoring" -> cloudWatchMetricsQueryHandler.handle(action, formParams, region);
