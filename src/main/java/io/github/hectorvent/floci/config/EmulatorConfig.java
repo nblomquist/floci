@@ -131,6 +131,7 @@ public interface EmulatorConfig {
         AppConfigDataStorageConfig appconfigdata();
         ElastiCacheStorageConfig elasticache();
         RdsStorageConfig rds();
+        DocDbStorageConfig docdb();
         NeptuneStorageConfig neptune();
         BackupStorageConfig backup();
         CloudFrontStorageConfig cloudfront();
@@ -233,6 +234,10 @@ public interface EmulatorConfig {
     }
 
     interface NeptuneStorageConfig {
+        Optional<String> mode();
+    }
+
+    interface DocDbStorageConfig {
         Optional<String> mode();
     }
 

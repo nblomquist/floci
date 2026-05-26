@@ -26,25 +26,23 @@ class DocDbIntegrationTest {
         .when().post("/")
         .then()
             .statusCode(400)
-            .body(containsString("<Code>UnsupportedOperation</Code>"))
-            .body(containsString("DocumentDB"))
-            .body(containsString("CreateDBSubnetGroup"));
+            .body(containsString("<Code>InvalidParameterValue</Code>"))
+            .body(containsString("DBSubnetGroupName is required."));
     }
 
     @Test
-    void docDbEngineDoesNotRouteToRdsImplementation() {
+    void docDbEngineRoutedToDocDbHandlerNotRds() {
         given()
             .header("Authorization", rdsAuthorization())
             .contentType(FORM)
             .formParam("Action", "CreateDBCluster")
-            .formParam("DBClusterIdentifier", "phase-one-docdb-cluster")
+            .formParam("DBClusterIdentifier", "phase-1-docdb-cluster-int")
             .formParam("Engine", "docdb")
         .when().post("/")
         .then()
-            .statusCode(400)
-            .body(containsString("<Code>UnsupportedOperation</Code>"))
-            .body(containsString("DocumentDB"))
-            .body(containsString("CreateDBCluster"));
+            .statusCode(200)
+            .body(containsString("<Engine>docdb</Engine>"))
+            .body(containsString("<DBClusterIdentifier>phase-1-docdb-cluster-int</DBClusterIdentifier>"));
     }
 
     @Test

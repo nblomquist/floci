@@ -307,6 +307,13 @@ public class AwsQueryController {
             "ListTagsForResource", "TagResource", "UntagResource"
     );
 
+    private static final Set<String> DOCDB_ACTIONS = Set.of(
+            "CreateDBInstance", "DescribeDBInstances", "DeleteDBInstance", "ModifyDBInstance",
+            "CreateDBCluster", "DescribeDBClusters", "DeleteDBCluster", "ModifyDBCluster",
+            "CreateDBSubnetGroup", "DescribeDBSubnetGroups", "DeleteDBSubnetGroup",
+            "AddTagsToResource", "ListTagsForResource", "RemoveTagsFromResource"
+    );
+
     private static final Set<String> RDS_ACTIONS = Set.of(
             "CreateDBInstance", "DescribeDBInstances", "DeleteDBInstance",
             "ModifyDBInstance", "RebootDBInstance",
@@ -379,6 +386,9 @@ public class AwsQueryController {
         }
         if (ELASTICACHE_ACTIONS.contains(action)) {
             return "elasticache";
+        }
+        if (DOCDB_ACTIONS.contains(action)) {
+            return "docdb";
         }
         if (RDS_ACTIONS.contains(action)) {
             return "rds";

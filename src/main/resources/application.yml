@@ -84,6 +84,7 @@ floci:
       rds:
         # Override storage mode for RDS (memory = no Docker volumes; hybrid/persistent = named volume per instance)
         # mode: memory
+      docdb:
       cloudfront:
 
   dns:
