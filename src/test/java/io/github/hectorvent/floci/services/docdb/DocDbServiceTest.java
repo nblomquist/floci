@@ -95,6 +95,12 @@ class DocDbServiceTest {
     }
 
     @Test
+    void listSubnetGroupsReturnsEmptyWhenNoneExist() {
+        assertTrue(service.listSubnetGroups(null).isEmpty());
+        assertTrue(service.listSubnetGroups("anything").isEmpty());
+    }
+
+    @Test
     void deleteSubnetGroupSucceeds() {
         service.createSubnetGroup("sg1", "desc", null);
         service.deleteSubnetGroup("sg1");
@@ -205,6 +211,19 @@ class DocDbServiceTest {
         AwsException exception = assertThrows(AwsException.class,
                 () -> service.getDbCluster("nonexistent"));
         assertEquals("DBClusterNotFoundFault", exception.getErrorCode());
+    }
+
+    @Test
+    void modifyDbClusterNotFoundThrows() {
+        AwsException exception = assertThrows(AwsException.class,
+                () -> service.modifyDbCluster("nonexistent", "new-password"));
+        assertEquals("DBClusterNotFoundFault", exception.getErrorCode());
+    }
+
+    @Test
+    void listDbClustersReturnsEmptyWhenNoneExist() {
+        assertTrue(service.listDbClusters(null).isEmpty());
+        assertTrue(service.listDbClusters("anything").isEmpty());
     }
 
     @Test
@@ -325,6 +344,19 @@ class DocDbServiceTest {
         AwsException exception = assertThrows(AwsException.class,
                 () -> service.getDbInstance("nonexistent"));
         assertEquals("DBInstanceNotFound", exception.getErrorCode());
+    }
+
+    @Test
+    void modifyDbInstanceNotFoundThrows() {
+        AwsException exception = assertThrows(AwsException.class,
+                () -> service.modifyDbInstance("nonexistent", "db.r5.xlarge"));
+        assertEquals("DBInstanceNotFound", exception.getErrorCode());
+    }
+
+    @Test
+    void listDbInstancesReturnsEmptyWhenNoneExist() {
+        assertTrue(service.listDbInstances(null).isEmpty());
+        assertTrue(service.listDbInstances("anything").isEmpty());
     }
 
     @Test

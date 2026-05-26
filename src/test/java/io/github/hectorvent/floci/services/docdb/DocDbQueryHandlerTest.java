@@ -82,6 +82,31 @@ class DocDbQueryHandlerTest {
     }
 
     @Test
+    void describeDbSubnetGroups_withNonexistentNameReturnsError() {
+        when(service.listSubnetGroups("nonexistent"))
+                .thenThrow(new AwsException("DBSubnetGroupNotFoundFault", "not found", 404));
+
+        MultivaluedMap<String, String> p = params();
+        p.add("DBSubnetGroupName", "nonexistent");
+        Response response = handler.handle("DescribeDBSubnetGroups", p);
+
+        assertEquals(404, response.getStatus());
+        String body = (String) response.getEntity();
+        assertTrue(body.contains("DBSubnetGroupNotFoundFault"));
+    }
+
+    @Test
+    void describeDbSubnetGroups_returnsEmptyListWhenNoneExist() {
+        when(service.listSubnetGroups(null)).thenReturn(java.util.List.of());
+
+        Response response = handler.handle("DescribeDBSubnetGroups", params());
+
+        assertEquals(200, response.getStatus());
+        String body = (String) response.getEntity();
+        assertTrue(body.contains("DescribeDBSubnetGroupsResponse"));
+    }
+
+    @Test
     void deleteDBSubnetGroup_returnsNoResult() {
         MultivaluedMap<String, String> p = params();
         p.add("DBSubnetGroupName", "sg1");
@@ -119,6 +144,31 @@ class DocDbQueryHandlerTest {
     }
 
     @Test
+    void describeDbClusters_withNonexistentIdentifierReturnsError() {
+        when(service.listDbClusters("nonexistent"))
+                .thenThrow(new AwsException("DBClusterNotFoundFault", "not found", 404));
+
+        MultivaluedMap<String, String> p = params();
+        p.add("DBClusterIdentifier", "nonexistent");
+        Response response = handler.handle("DescribeDBClusters", p);
+
+        assertEquals(404, response.getStatus());
+        String body = (String) response.getEntity();
+        assertTrue(body.contains("DBClusterNotFoundFault"));
+    }
+
+    @Test
+    void describeDbClusters_returnsEmptyListWhenNoneExist() {
+        when(service.listDbClusters(null)).thenReturn(java.util.List.of());
+
+        Response response = handler.handle("DescribeDBClusters", params());
+
+        assertEquals(200, response.getStatus());
+        String body = (String) response.getEntity();
+        assertTrue(body.contains("DescribeDBClustersResponse"));
+    }
+
+    @Test
     void createDBCluster_requiresIdentifier() {
         Response response = handler.handle("CreateDBCluster", params());
 
@@ -141,6 +191,21 @@ class DocDbQueryHandlerTest {
 
         verify(service).createDbCluster(eq("c1"), eq("4.0.0"), eq("admin"), eq("secret"), eq("sg1"), any());
         assertEquals(200, response.getStatus());
+    }
+
+    @Test
+    void modifyDbCluster_notFoundReturnsError() {
+        when(service.modifyDbCluster("nonexistent", "pwd"))
+                .thenThrow(new AwsException("DBClusterNotFoundFault", "not found", 404));
+
+        MultivaluedMap<String, String> p = params();
+        p.add("DBClusterIdentifier", "nonexistent");
+        p.add("MasterUserPassword", "pwd");
+        Response response = handler.handle("ModifyDBCluster", p);
+
+        assertEquals(404, response.getStatus());
+        String body = (String) response.getEntity();
+        assertTrue(body.contains("DBClusterNotFoundFault"));
     }
 
     @Test
@@ -198,6 +263,31 @@ class DocDbQueryHandlerTest {
     }
 
     @Test
+    void describeDbInstances_withNonexistentIdentifierReturnsError() {
+        when(service.listDbInstances("nonexistent"))
+                .thenThrow(new AwsException("DBInstanceNotFound", "not found", 404));
+
+        MultivaluedMap<String, String> p = params();
+        p.add("DBInstanceIdentifier", "nonexistent");
+        Response response = handler.handle("DescribeDBInstances", p);
+
+        assertEquals(404, response.getStatus());
+        String body = (String) response.getEntity();
+        assertTrue(body.contains("DBInstanceNotFound"));
+    }
+
+    @Test
+    void describeDbInstances_returnsEmptyListWhenNoneExist() {
+        when(service.listDbInstances(null)).thenReturn(java.util.List.of());
+
+        Response response = handler.handle("DescribeDBInstances", params());
+
+        assertEquals(200, response.getStatus());
+        String body = (String) response.getEntity();
+        assertTrue(body.contains("DescribeDBInstancesResponse"));
+    }
+
+    @Test
     void createDBInstance_requiresIdentifier() {
         Response response = handler.handle("CreateDBInstance", params());
 
@@ -245,6 +335,21 @@ class DocDbQueryHandlerTest {
 
         assertEquals(400, response.getStatus());
         assertTrue(((String) response.getEntity()).contains("DBInstanceIdentifier is required"));
+    }
+
+    @Test
+    void modifyDBInstance_notFoundReturnsError() {
+        when(service.modifyDbInstance("nonexistent", "db.r5.xlarge"))
+                .thenThrow(new AwsException("DBInstanceNotFound", "not found", 404));
+
+        MultivaluedMap<String, String> p = params();
+        p.add("DBInstanceIdentifier", "nonexistent");
+        p.add("DBInstanceClass", "db.r5.xlarge");
+        Response response = handler.handle("ModifyDBInstance", p);
+
+        assertEquals(404, response.getStatus());
+        String body = (String) response.getEntity();
+        assertTrue(body.contains("DBInstanceNotFound"));
     }
 
     // ── Error handling ────────────────────────────────────────────────────────
@@ -357,6 +462,17 @@ class DocDbQueryHandlerTest {
         assertEquals(400, response.getStatus());
         String body = (String) response.getEntity();
         assertTrue(body.contains("ResourceName is required"));
+    }
+
+    @Test
+    void removeTagsFromResource_requiresTagKeys() {
+        MultivaluedMap<String, String> p = params();
+        p.add("ResourceName", "arn:aws:rds:us-east-1:123456789012:cluster:c1");
+        Response response = handler.handle("RemoveTagsFromResource", p);
+
+        assertEquals(400, response.getStatus());
+        String body = (String) response.getEntity();
+        assertTrue(body.contains("TagKey is required") || body.contains("At least one TagKey is required"));
     }
 
     @Test
