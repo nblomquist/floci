@@ -11,6 +11,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.Collection;
+import java.util.HashMap;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -36,7 +38,7 @@ class DocDbServiceTest {
 
     @Test
     void createSubnetGroupGeneratesVirtualFields() {
-        DocDbSubnetGroup group = service.createSubnetGroup("my-subnet-group", "My subnet group");
+        DocDbSubnetGroup group = service.createSubnetGroup("my-subnet-group", "My subnet group", null);
 
         assertEquals("my-subnet-group", group.getDbSubnetGroupName());
         assertEquals("My subnet group", group.getDbSubnetGroupDescription());
@@ -48,9 +50,9 @@ class DocDbServiceTest {
 
     @Test
     void createSubnetGroupRejectsDuplicate() {
-        service.createSubnetGroup("sg1", "desc");
+        service.createSubnetGroup("sg1", "desc", null);
         AwsException exception = assertThrows(AwsException.class,
-                () -> service.createSubnetGroup("sg1", "desc"));
+                () -> service.createSubnetGroup("sg1", "desc", null));
         assertEquals("DBSubnetGroupAlreadyExistsFault", exception.getErrorCode());
     }
 
@@ -63,7 +65,7 @@ class DocDbServiceTest {
 
     @Test
     void listSubnetGroupsIsCaseInsensitive() {
-        service.createSubnetGroup("mysg", "desc");
+        service.createSubnetGroup("mysg", "desc", null);
         Collection<DocDbSubnetGroup> result = service.listSubnetGroups("MYSG");
         assertEquals(1, result.size());
         assertEquals("mysg", result.iterator().next().getDbSubnetGroupName());
@@ -71,14 +73,14 @@ class DocDbServiceTest {
 
     @Test
     void listSubnetGroupsReturnsAllWhenNoFilter() {
-        service.createSubnetGroup("sg1", "desc1");
-        service.createSubnetGroup("sg2", "desc2");
+        service.createSubnetGroup("sg1", "desc1", null);
+        service.createSubnetGroup("sg2", "desc2", null);
         assertEquals(2, service.listSubnetGroups(null).size());
     }
 
     @Test
     void deleteSubnetGroupSucceeds() {
-        service.createSubnetGroup("sg1", "desc");
+        service.createSubnetGroup("sg1", "desc", null);
         service.deleteSubnetGroup("sg1");
         assertTrue(service.listSubnetGroups(null).isEmpty());
     }
@@ -94,7 +96,7 @@ class DocDbServiceTest {
 
     @Test
     void createDbClusterGeneratesMissingFields() {
-        DocDbCluster cluster = service.createDbCluster("my-cluster", null, null, null, null);
+        DocDbCluster cluster = service.createDbCluster("my-cluster", null, null, null, null, null);
 
         assertEquals("my-cluster", cluster.getDbClusterIdentifier());
         assertEquals("available", cluster.getStatus());
@@ -109,8 +111,8 @@ class DocDbServiceTest {
 
     @Test
     void createDbClusterAcceptsExplicitParameters() {
-        service.createSubnetGroup("sg1", "desc");
-        DocDbCluster cluster = service.createDbCluster("my-cluster", "5.0.0", "dbadmin", "secret", "sg1");
+        service.createSubnetGroup("sg1", "desc", null);
+        DocDbCluster cluster = service.createDbCluster("my-cluster", "5.0.0", "dbadmin", "secret", "sg1", null);
 
         assertEquals("5.0.0", cluster.getEngineVersion());
         assertEquals("dbadmin", cluster.getMasterUsername());
@@ -119,16 +121,16 @@ class DocDbServiceTest {
 
     @Test
     void createDbClusterRejectsDuplicate() {
-        service.createDbCluster("c1", null, null, null, null);
+        service.createDbCluster("c1", null, null, null, null, null);
         AwsException exception = assertThrows(AwsException.class,
-                () -> service.createDbCluster("c1", null, null, null, null));
+                () -> service.createDbCluster("c1", null, null, null, null, null));
         assertEquals("DBClusterAlreadyExistsFault", exception.getErrorCode());
     }
 
     @Test
     void createDbClusterRejectsMissingSubnetGroup() {
         AwsException exception = assertThrows(AwsException.class,
-                () -> service.createDbCluster("c1", null, null, null, "nonexistent-sg"));
+                () -> service.createDbCluster("c1", null, null, null, "nonexistent-sg", null));
         assertEquals("DBSubnetGroupNotFoundFault", exception.getErrorCode());
     }
 
@@ -141,14 +143,14 @@ class DocDbServiceTest {
 
     @Test
     void listDbClustersIsCaseInsensitive() {
-        service.createDbCluster("mycluster", null, null, null, null);
+        service.createDbCluster("mycluster", null, null, null, null, null);
         Collection<DocDbCluster> result = service.listDbClusters("MYCLUSTER");
         assertEquals(1, result.size());
     }
 
     @Test
     void modifyDbClusterDoesNotThrow() {
-        service.createDbCluster("c1", null, null, null, null);
+        service.createDbCluster("c1", null, null, null, null, null);
         DocDbCluster modified = service.modifyDbCluster("c1", "new-password");
         assertNotNull(modified);
         assertEquals("c1", modified.getDbClusterIdentifier());
@@ -156,14 +158,14 @@ class DocDbServiceTest {
 
     @Test
     void deleteDbClusterSucceeds() {
-        service.createDbCluster("c1", null, null, null, null);
+        service.createDbCluster("c1", null, null, null, null, null);
         service.deleteDbCluster("c1");
         assertTrue(service.listDbClusters(null).isEmpty());
     }
 
     @Test
     void deleteDbClusterFailsWhenMembersRemain() {
-        DocDbCluster cluster = service.createDbCluster("c1", null, null, null, null);
+        DocDbCluster cluster = service.createDbCluster("c1", null, null, null, null, null);
         cluster.getDbClusterMembers().add("instance-1");
 
         AwsException exception = assertThrows(AwsException.class,
@@ -184,14 +186,14 @@ class DocDbServiceTest {
     @Test
     void createDbInstanceRequiresCluster() {
         AwsException exception = assertThrows(AwsException.class,
-                () -> service.createDbInstance("i1", "c1", null, null));
+                () -> service.createDbInstance("i1", "c1", null, null, null));
         assertEquals("DBClusterNotFoundFault", exception.getErrorCode());
     }
 
     @Test
     void createDbInstanceGeneratesMissingFields() {
-        service.createDbCluster("c1", null, null, null, null);
-        DocDbInstance instance = service.createDbInstance("i1", "c1", null, null);
+        service.createDbCluster("c1", null, null, null, null, null);
+        DocDbInstance instance = service.createDbInstance("i1", "c1", null, null, null);
 
         assertEquals("i1", instance.getDbInstanceIdentifier());
         assertEquals("c1", instance.getDbClusterIdentifier());
@@ -206,8 +208,8 @@ class DocDbServiceTest {
 
     @Test
     void createDbInstanceAddsToClusterMembers() {
-        service.createDbCluster("c1", null, null, null, null);
-        DocDbInstance instance = service.createDbInstance("i1", "c1", "db.r5.xlarge", "5.0.0");
+        service.createDbCluster("c1", null, null, null, null, null);
+        DocDbInstance instance = service.createDbInstance("i1", "c1", "db.r5.xlarge", "5.0.0", null);
 
         assertEquals("db.r5.xlarge", instance.getDbInstanceClass());
         assertEquals("5.0.0", instance.getEngineVersion());
@@ -218,10 +220,10 @@ class DocDbServiceTest {
 
     @Test
     void createDbInstanceRejectsDuplicate() {
-        service.createDbCluster("c1", null, null, null, null);
-        service.createDbInstance("i1", "c1", null, null);
+        service.createDbCluster("c1", null, null, null, null, null);
+        service.createDbInstance("i1", "c1", null, null, null);
         AwsException exception = assertThrows(AwsException.class,
-                () -> service.createDbInstance("i1", "c1", null, null));
+                () -> service.createDbInstance("i1", "c1", null, null, null));
         assertEquals("DBInstanceAlreadyExists", exception.getErrorCode());
     }
 
@@ -234,32 +236,32 @@ class DocDbServiceTest {
 
     @Test
     void listDbInstancesIsCaseInsensitive() {
-        service.createDbCluster("c1", null, null, null, null);
-        service.createDbInstance("myinstance", "c1", null, null);
+        service.createDbCluster("c1", null, null, null, null, null);
+        service.createDbInstance("myinstance", "c1", null, null, null);
         Collection<DocDbInstance> result = service.listDbInstances("MYINSTANCE");
         assertEquals(1, result.size());
     }
 
     @Test
     void listDbInstancesReturnsAllWhenNoFilter() {
-        service.createDbCluster("c1", null, null, null, null);
-        service.createDbInstance("i1", "c1", null, null);
-        service.createDbInstance("i2", "c1", null, null);
+        service.createDbCluster("c1", null, null, null, null, null);
+        service.createDbInstance("i1", "c1", null, null, null);
+        service.createDbInstance("i2", "c1", null, null, null);
         assertEquals(2, service.listDbInstances(null).size());
     }
 
     @Test
     void modifyDbInstanceUpdatesClass() {
-        service.createDbCluster("c1", null, null, null, null);
-        service.createDbInstance("i1", "c1", "db.r5.large", null);
+        service.createDbCluster("c1", null, null, null, null, null);
+        service.createDbInstance("i1", "c1", "db.r5.large", null, null);
         DocDbInstance modified = service.modifyDbInstance("i1", "db.r5.xlarge");
         assertEquals("db.r5.xlarge", modified.getDbInstanceClass());
     }
 
     @Test
     void deleteDbInstanceRemovesFromClusterMembers() {
-        service.createDbCluster("c1", null, null, null, null);
-        service.createDbInstance("i1", "c1", null, null);
+        service.createDbCluster("c1", null, null, null, null, null);
+        service.createDbInstance("i1", "c1", null, null, null);
         service.deleteDbInstance("i1");
 
         assertTrue(service.listDbInstances(null).isEmpty());
@@ -276,16 +278,16 @@ class DocDbServiceTest {
     @Test
     void fullLifecycleCreateDescribeDelete() {
         // Subnet group
-        service.createSubnetGroup("sg1", "Test subnet group");
+        service.createSubnetGroup("sg1", "Test subnet group", null);
 
         // Cluster
-        DocDbCluster cluster = service.createDbCluster("cluster1", "4.0.0", "admin", "password", "sg1");
+        DocDbCluster cluster = service.createDbCluster("cluster1", "4.0.0", "admin", "password", "sg1", null);
         assertEquals("cluster1", cluster.getDbClusterIdentifier());
 
         // Instances
-        DocDbInstance i1 = service.createDbInstance("instance1", "cluster1", "db.r5.large", "4.0.0");
+        DocDbInstance i1 = service.createDbInstance("instance1", "cluster1", "db.r5.large", "4.0.0", null);
         assertEquals("instance1", i1.getDbInstanceIdentifier());
-        DocDbInstance i2 = service.createDbInstance("instance2", "cluster1", "db.r5.xlarge", "4.0.0");
+        DocDbInstance i2 = service.createDbInstance("instance2", "cluster1", "db.r5.xlarge", "4.0.0", null);
         assertEquals("instance2", i2.getDbInstanceIdentifier());
 
         // Describe cluster - should have 2 members
@@ -306,5 +308,108 @@ class DocDbServiceTest {
         // Delete subnet group
         service.deleteSubnetGroup("sg1");
         assertTrue(service.listSubnetGroups(null).isEmpty());
+    }
+
+    // ── Tags ──────────────────────────────────────────────────────────────────
+
+    @Test
+    void listTagsForClusterReturnsEmptyByDefault() {
+        service.createDbCluster("c1", null, null, null, null, null);
+        DocDbCluster cluster = service.getDbCluster("c1");
+        Map<String, String> tags = service.listTags(cluster.getDbClusterArn());
+        assertTrue(tags.isEmpty());
+    }
+
+    @Test
+    void tagResourceAddsTagsToCluster() {
+        service.createDbCluster("c1", null, null, null, null, null);
+        DocDbCluster cluster = service.getDbCluster("c1");
+        String arn = cluster.getDbClusterArn();
+
+        Map<String, String> newTags = new HashMap<>();
+        newTags.put("environment", "test");
+        newTags.put("phase", "three");
+        service.tagResource(arn, newTags);
+
+        Map<String, String> tags = service.listTags(arn);
+        assertEquals(2, tags.size());
+        assertEquals("test", tags.get("environment"));
+        assertEquals("three", tags.get("phase"));
+    }
+
+    @Test
+    void untagResourceRemovesSpecifiedKeys() {
+        service.createDbCluster("c1", null, null, null, null, null);
+        DocDbCluster cluster = service.getDbCluster("c1");
+        String arn = cluster.getDbClusterArn();
+
+        Map<String, String> newTags = new HashMap<>();
+        newTags.put("keep", "this");
+        newTags.put("remove", "me");
+        service.tagResource(arn, newTags);
+
+        service.untagResource(arn, java.util.List.of("remove"));
+
+        Map<String, String> tags = service.listTags(arn);
+        assertEquals(1, tags.size());
+        assertEquals("this", tags.get("keep"));
+        assertNull(tags.get("remove"));
+    }
+
+    @Test
+    void tagResourceWorksOnInstance() {
+        service.createDbCluster("c1", null, null, null, null, null);
+        DocDbInstance instance = service.createDbInstance("i1", "c1", null, null, null);
+
+        Map<String, String> newTags = new HashMap<>();
+        newTags.put("role", "reader");
+        service.tagResource(instance.getDbInstanceArn(), newTags);
+
+        Map<String, String> tags = service.listTags(instance.getDbInstanceArn());
+        assertEquals(1, tags.size());
+        assertEquals("reader", tags.get("role"));
+    }
+
+    @Test
+    void tagResourceWorksOnSubnetGroup() {
+        DocDbSubnetGroup group = service.createSubnetGroup("sg1", "desc", null);
+
+        Map<String, String> newTags = new HashMap<>();
+        newTags.put("purpose", "compat");
+        service.tagResource(group.getDbSubnetGroupArn(), newTags);
+
+        Map<String, String> tags = service.listTags(group.getDbSubnetGroupArn());
+        assertEquals(1, tags.size());
+        assertEquals("compat", tags.get("purpose"));
+    }
+
+    @Test
+    void tagResourceThrowsForUnknownArn() {
+        AwsException exception = assertThrows(AwsException.class,
+                () -> service.tagResource("arn:aws:rds:us-east-1:123456789012:cluster:nonexistent",
+                        Map.of("k", "v")));
+        assertEquals("InvalidParameterValue", exception.getErrorCode());
+    }
+
+    @Test
+    void createSubnetGroupWithInitialTagsStoresTags() {
+        Map<String, String> initialTags = new HashMap<>();
+        initialTags.put("purpose", "compat");
+        DocDbSubnetGroup group = service.createSubnetGroup("sg-tagged", "desc", initialTags);
+
+        assertEquals("compat", group.getTags().get("purpose"));
+        Map<String, String> tags = service.listTags(group.getDbSubnetGroupArn());
+        assertEquals("compat", tags.get("purpose"));
+    }
+
+    @Test
+    void createClusterWithInitialTagsStoresTags() {
+        Map<String, String> initialTags = new HashMap<>();
+        initialTags.put("env", "prod");
+        DocDbCluster cluster = service.createDbCluster("c-tagged", null, null, null, null, initialTags);
+
+        assertEquals("prod", cluster.getTags().get("env"));
+        Map<String, String> tags = service.listTags(cluster.getDbClusterArn());
+        assertEquals("prod", tags.get("env"));
     }
 }

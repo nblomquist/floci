@@ -13,9 +13,12 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 class DocDbQueryHandlerTest {
@@ -59,14 +62,14 @@ class DocDbQueryHandlerTest {
     @Test
     void createDBSubnetGroup_passesArgumentsToService() {
         DocDbSubnetGroup group = makeSubnetGroup("sg1");
-        when(service.createSubnetGroup("sg1", "test desc")).thenReturn(group);
+        when(service.createSubnetGroup(eq("sg1"), eq("test desc"), any())).thenReturn(group);
 
         MultivaluedMap<String, String> p = params();
         p.add("DBSubnetGroupName", "sg1");
         p.add("DBSubnetGroupDescription", "test desc");
         Response response = handler.handle("CreateDBSubnetGroup", p);
 
-        verify(service).createSubnetGroup("sg1", "test desc");
+        verify(service).createSubnetGroup(eq("sg1"), eq("test desc"), any());
         String body = (String) response.getEntity();
         assertTrue(body.contains("<DBSubnetGroupName>sg1</DBSubnetGroupName>"));
     }
@@ -127,7 +130,7 @@ class DocDbQueryHandlerTest {
     @Test
     void createDBCluster_passesArgumentsToService() {
         DocDbCluster cluster = makeCluster("c1");
-        when(service.createDbCluster("c1", "4.0.0", "admin", "secret", "sg1")).thenReturn(cluster);
+        when(service.createDbCluster(eq("c1"), eq("4.0.0"), eq("admin"), eq("secret"), eq("sg1"), any())).thenReturn(cluster);
 
         MultivaluedMap<String, String> p = params();
         p.add("DBClusterIdentifier", "c1");
@@ -137,7 +140,7 @@ class DocDbQueryHandlerTest {
         p.add("DBSubnetGroupName", "sg1");
         Response response = handler.handle("CreateDBCluster", p);
 
-        verify(service).createDbCluster("c1", "4.0.0", "admin", "secret", "sg1");
+        verify(service).createDbCluster(eq("c1"), eq("4.0.0"), eq("admin"), eq("secret"), eq("sg1"), any());
         assertEquals(200, response.getStatus());
     }
 
@@ -216,7 +219,7 @@ class DocDbQueryHandlerTest {
     @Test
     void createDBInstance_passesArgumentsToService() {
         DocDbInstance instance = makeInstance("i1");
-        when(service.createDbInstance("i1", "c1", "db.r5.large", "4.0.0")).thenReturn(instance);
+        when(service.createDbInstance(eq("i1"), eq("c1"), eq("db.r5.large"), eq("4.0.0"), any())).thenReturn(instance);
 
         MultivaluedMap<String, String> p = params();
         p.add("DBInstanceIdentifier", "i1");
@@ -225,7 +228,7 @@ class DocDbQueryHandlerTest {
         p.add("EngineVersion", "4.0.0");
         Response response = handler.handle("CreateDBInstance", p);
 
-        verify(service).createDbInstance("i1", "c1", "db.r5.large", "4.0.0");
+        verify(service).createDbInstance(eq("i1"), eq("c1"), eq("db.r5.large"), eq("4.0.0"), any());
         assertEquals(200, response.getStatus());
     }
 
@@ -257,7 +260,7 @@ class DocDbQueryHandlerTest {
 
     @Test
     void serviceAwsExceptionWrapsToXmlError() {
-        when(service.createDbCluster(eq("fail"), any(), any(), any(), any()))
+        when(service.createDbCluster(eq("fail"), any(), any(), any(), any(), any()))
                 .thenThrow(new AwsException("DBClusterNotFoundFault", "cluster not found", 404));
 
         MultivaluedMap<String, String> p = params();
@@ -275,7 +278,7 @@ class DocDbQueryHandlerTest {
     @Test
     void createDBCluster_responseContainsDocdbEngine() {
         DocDbCluster cluster = makeCluster("c1");
-        when(service.createDbCluster(any(), any(), any(), any(), any())).thenReturn(cluster);
+        when(service.createDbCluster(any(), any(), any(), any(), any(), any())).thenReturn(cluster);
 
         MultivaluedMap<String, String> p = params();
         p.add("DBClusterIdentifier", "c1");
@@ -288,7 +291,7 @@ class DocDbQueryHandlerTest {
     @Test
     void createDBInstance_responseContainsEndpointBlock() {
         DocDbInstance instance = makeInstance("i1");
-        when(service.createDbInstance(any(), any(), any(), any())).thenReturn(instance);
+        when(service.createDbInstance(any(), any(), any(), any(), any())).thenReturn(instance);
 
         MultivaluedMap<String, String> p = params();
         p.add("DBInstanceIdentifier", "i1");
@@ -304,7 +307,7 @@ class DocDbQueryHandlerTest {
     @Test
     void createDBSubnetGroup_responseContainsSubnetXml() {
         DocDbSubnetGroup group = makeSubnetGroup("sg1");
-        when(service.createSubnetGroup(any(), any())).thenReturn(group);
+        when(service.createSubnetGroup(any(), any(), any())).thenReturn(group);
 
         MultivaluedMap<String, String> p = params();
         p.add("DBSubnetGroupName", "sg1");
@@ -315,6 +318,133 @@ class DocDbQueryHandlerTest {
         assertTrue(body.contains("<Subnets>"));
         assertTrue(body.contains("<SubnetAvailabilityZone>"));
         assertTrue(body.contains("<SubnetIdentifier>"));
+    }
+
+    // ── Tags ──────────────────────────────────────────────────────────────────
+
+    @Test
+    void addTagsToResource_requiresResourceName() {
+        Response response = handler.handle("AddTagsToResource", params());
+        assertEquals(400, response.getStatus());
+        String body = (String) response.getEntity();
+        assertTrue(body.contains("ResourceName is required"));
+    }
+
+    @Test
+    void addTagsToResource_requiresTags() {
+        MultivaluedMap<String, String> p = params();
+        p.add("ResourceName", "arn:aws:rds:us-east-1:123456789012:cluster:c1");
+        Response response = handler.handle("AddTagsToResource", p);
+        assertEquals(400, response.getStatus());
+    }
+
+    @Test
+    void addTagsToResource_callsService() {
+        MultivaluedMap<String, String> p = params();
+        p.add("ResourceName", "arn:aws:rds:us-east-1:123456789012:cluster:c1");
+        p.add("Tags.member.1.Key", "env");
+        p.add("Tags.member.1.Value", "test");
+        Response response = handler.handle("AddTagsToResource", p);
+
+        verify(service).tagResource("arn:aws:rds:us-east-1:123456789012:cluster:c1",
+                Map.of("env", "test"));
+        String body = (String) response.getEntity();
+        assertTrue(body.contains("AddTagsToResourceResponse"));
+    }
+
+    @Test
+    void removeTagsFromResource_requiresResourceName() {
+        Response response = handler.handle("RemoveTagsFromResource", params());
+        assertEquals(400, response.getStatus());
+        String body = (String) response.getEntity();
+        assertTrue(body.contains("ResourceName is required"));
+    }
+
+    @Test
+    void removeTagsFromResource_callsService() {
+        MultivaluedMap<String, String> p = params();
+        p.add("ResourceName", "arn:aws:rds:us-east-1:123456789012:cluster:c1");
+        p.add("TagKeys.member.1", "env");
+        p.add("TagKeys.member.2", "phase");
+        Response response = handler.handle("RemoveTagsFromResource", p);
+
+        verify(service).untagResource("arn:aws:rds:us-east-1:123456789012:cluster:c1",
+                java.util.List.of("env", "phase"));
+        String body = (String) response.getEntity();
+        assertTrue(body.contains("RemoveTagsFromResourceResponse"));
+    }
+
+    @Test
+    void listTagsForResource_requiresResourceName() {
+        Response response = handler.handle("ListTagsForResource", params());
+        assertEquals(400, response.getStatus());
+        String body = (String) response.getEntity();
+        assertTrue(body.contains("ResourceName is required"));
+    }
+
+    @Test
+    void listTagsForResource_returnsTagListXml() {
+        when(service.listTags("arn:aws:rds:us-east-1:123456789012:cluster:c1"))
+                .thenReturn(Map.of("env", "test"));
+
+        MultivaluedMap<String, String> p = params();
+        p.add("ResourceName", "arn:aws:rds:us-east-1:123456789012:cluster:c1");
+        Response response = handler.handle("ListTagsForResource", p);
+
+        String body = (String) response.getEntity();
+        assertTrue(body.contains("<TagList>"));
+        assertTrue(body.contains("<Key>env</Key>"));
+        assertTrue(body.contains("<Value>test</Value>"));
+    }
+
+    @Test
+    void describeDbClusters_responseIncludesTagList() {
+        DocDbCluster cluster = makeCluster("c1");
+        cluster.getTags().put("env", "test");
+        when(service.listDbClusters(null)).thenReturn(List.of(cluster));
+
+        Response response = handler.handle("DescribeDBClusters", params());
+        String body = (String) response.getEntity();
+        assertTrue(body.contains("<TagList>"), "Expected TagList in DescribeDBClusters response");
+        assertTrue(body.contains("<Key>env</Key>"));
+    }
+
+    @Test
+    void describeDbInstances_responseIncludesTagList() {
+        DocDbInstance instance = makeInstance("i1");
+        instance.getTags().put("role", "reader");
+        when(service.listDbInstances(null)).thenReturn(List.of(instance));
+
+        Response response = handler.handle("DescribeDBInstances", params());
+        String body = (String) response.getEntity();
+        assertTrue(body.contains("<TagList>"), "Expected TagList in DescribeDBInstances response");
+    }
+
+    @Test
+    void describeDbSubnetGroups_responseIncludesTagList() {
+        DocDbSubnetGroup group = makeSubnetGroup("sg1");
+        group.getTags().put("purpose", "compat");
+        when(service.listSubnetGroups(null)).thenReturn(List.of(group));
+
+        Response response = handler.handle("DescribeDBSubnetGroups", params());
+        String body = (String) response.getEntity();
+        assertTrue(body.contains("<TagList>"), "Expected TagList in DescribeDBSubnetGroups response");
+    }
+
+    @Test
+    void createDBCluster_passesInitialTags() {
+        DocDbCluster cluster = makeCluster("c1");
+        when(service.createDbCluster(any(), any(), any(), any(), any(), any())).thenReturn(cluster);
+
+        MultivaluedMap<String, String> p = params();
+        p.add("DBClusterIdentifier", "c1");
+        p.add("Tags.member.1.Key", "env");
+        p.add("Tags.member.1.Value", "test");
+        handler.handle("CreateDBCluster", p);
+
+        // Verify tags were extracted and passed to service
+        verify(service).createDbCluster(eq("c1"), any(), any(), any(), any(), argThat(
+                tags -> tags instanceof Map && "test".equals(((Map<String, String>) tags).get("env"))));
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

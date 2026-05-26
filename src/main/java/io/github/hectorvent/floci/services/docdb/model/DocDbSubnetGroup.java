@@ -3,7 +3,9 @@ package io.github.hectorvent.floci.services.docdb.model;
 import io.quarkus.runtime.annotations.RegisterForReflection;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 @RegisterForReflection
 public class DocDbSubnetGroup {
@@ -12,7 +14,9 @@ public class DocDbSubnetGroup {
     private String dbSubnetGroupDescription;
     private String vpcId;
     private String subnetGroupStatus;
+    private String dbSubnetGroupArn;
     private List<Subnet> subnets = new ArrayList<>();
+    private Map<String, String> tags = new HashMap<>();
 
     public DocDbSubnetGroup() {}
 
@@ -27,6 +31,14 @@ public class DocDbSubnetGroup {
 
     public String getSubnetGroupStatus() { return subnetGroupStatus; }
     public void setSubnetGroupStatus(String subnetGroupStatus) { this.subnetGroupStatus = subnetGroupStatus; }
+
+    public String getDbSubnetGroupArn() { return dbSubnetGroupArn; }
+    public void setDbSubnetGroupArn(String dbSubnetGroupArn) { this.dbSubnetGroupArn = dbSubnetGroupArn; }
+
+    public Map<String, String> getTags() { return tags; }
+    public void setTags(Map<String, String> tags) {
+        this.tags = tags != null ? new HashMap<>(tags) : new HashMap<>();
+    }
 
     public List<Subnet> getSubnets() { return subnets; }
     public void setSubnets(List<Subnet> subnets) {

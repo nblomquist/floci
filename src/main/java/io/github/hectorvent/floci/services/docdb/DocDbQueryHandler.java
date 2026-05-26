@@ -15,6 +15,9 @@ import jakarta.ws.rs.core.Response;
 import org.jboss.logging.Logger;
 
 import java.util.Collection;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 @ApplicationScoped
 public class DocDbQueryHandler {
@@ -48,6 +51,10 @@ public class DocDbQueryHandler {
                 case "DescribeDBInstances"    -> handleDescribeDbInstances(params);
                 case "DeleteDBInstance"       -> handleDeleteDbInstance(params);
                 case "ModifyDBInstance"       -> handleModifyDbInstance(params);
+                // Tags
+                case "AddTagsToResource"      -> handleAddTagsToResource(params);
+                case "RemoveTagsFromResource" -> handleRemoveTagsFromResource(params);
+                case "ListTagsForResource"    -> handleListTagsForResource(params);
                 default -> AwsQueryResponse.error("UnsupportedOperation",
                         "Operation " + action + " is not supported by DocumentDB.", AwsNamespaces.RDS, 400);
             };
@@ -68,7 +75,8 @@ public class DocDbQueryHandler {
                     "DBSubnetGroupName is required.", AwsNamespaces.RDS, 400);
         }
         String description = params.getFirst("DBSubnetGroupDescription");
-        DocDbSubnetGroup group = service.createSubnetGroup(name, description);
+        Map<String, String> initialTags = extractTags(params);
+        DocDbSubnetGroup group = service.createSubnetGroup(name, description, initialTags);
         return Response.ok(AwsQueryResponse.envelope("CreateDBSubnetGroup", AwsNamespaces.RDS,
                 subnetGroupXml(group))).build();
     }
@@ -112,7 +120,8 @@ public class DocDbQueryHandler {
         String masterPassword = params.getFirst("MasterUserPassword");
         String subnetGroupName = params.getFirst("DBSubnetGroupName");
 
-        DocDbCluster cluster = service.createDbCluster(id, engineVersion, masterUsername, masterPassword, subnetGroupName);
+        Map<String, String> initialTags = extractTags(params);
+        DocDbCluster cluster = service.createDbCluster(id, engineVersion, masterUsername, masterPassword, subnetGroupName, initialTags);
         return Response.ok(AwsQueryResponse.envelope("CreateDBCluster", AwsNamespaces.RDS,
                 clusterXml(cluster))).build();
     }
@@ -178,8 +187,9 @@ public class DocDbQueryHandler {
         String dbInstanceClass = params.getFirst("DBInstanceClass");
         String engineVersion = params.getFirst("EngineVersion");
 
+        Map<String, String> initialTags = extractTags(params);
         DocDbInstance instance = service.createDbInstance(id, dbClusterIdentifier,
-                dbInstanceClass, engineVersion);
+                dbInstanceClass, engineVersion, initialTags);
         return Response.ok(AwsQueryResponse.envelope("CreateDBInstance", AwsNamespaces.RDS,
                 instanceXml(instance))).build();
     }
@@ -228,6 +238,49 @@ public class DocDbQueryHandler {
                 instanceXml(instance))).build();
     }
 
+    // ── Tags ──────────────────────────────────────────────────────────────────
+
+    private Response handleAddTagsToResource(MultivaluedMap<String, String> params) {
+        String resourceName = params.getFirst("ResourceName");
+        if (resourceName == null || resourceName.isBlank()) {
+            return AwsQueryResponse.error("InvalidParameterValue",
+                    "ResourceName is required.", AwsNamespaces.RDS, 400);
+        }
+        Map<String, String> tags = extractTags(params);
+        if (tags.isEmpty()) {
+            return AwsQueryResponse.error("InvalidParameterValue",
+                    "At least one tag is required.", AwsNamespaces.RDS, 400);
+        }
+        service.tagResource(resourceName, tags);
+        return Response.ok(AwsQueryResponse.envelopeNoResult("AddTagsToResource", AwsNamespaces.RDS)).build();
+    }
+
+    private Response handleRemoveTagsFromResource(MultivaluedMap<String, String> params) {
+        String resourceName = params.getFirst("ResourceName");
+        if (resourceName == null || resourceName.isBlank()) {
+            return AwsQueryResponse.error("InvalidParameterValue",
+                    "ResourceName is required.", AwsNamespaces.RDS, 400);
+        }
+        List<String> tagKeys = extractTagKeys(params);
+        if (tagKeys.isEmpty()) {
+            return AwsQueryResponse.error("InvalidParameterValue",
+                    "At least one TagKey is required.", AwsNamespaces.RDS, 400);
+        }
+        service.untagResource(resourceName, tagKeys);
+        return Response.ok(AwsQueryResponse.envelopeNoResult("RemoveTagsFromResource", AwsNamespaces.RDS)).build();
+    }
+
+    private Response handleListTagsForResource(MultivaluedMap<String, String> params) {
+        String resourceName = params.getFirst("ResourceName");
+        if (resourceName == null || resourceName.isBlank()) {
+            return AwsQueryResponse.error("InvalidParameterValue",
+                    "ResourceName is required.", AwsNamespaces.RDS, 400);
+        }
+        Map<String, String> tags = service.listTags(resourceName);
+        String xml = tagListXml(tags);
+        return Response.ok(AwsQueryResponse.envelope("ListTagsForResource", AwsNamespaces.RDS, xml)).build();
+    }
+
     // ── XML builders ──────────────────────────────────────────────────────────
 
     private String subnetGroupXml(DocDbSubnetGroup g) {
@@ -253,6 +306,7 @@ public class DocDbQueryHandler {
             }
         }
         xml.end("Subnets");
+        xml.raw(tagListXml(g.getTags()));
         return xml.build();
     }
 
@@ -293,6 +347,7 @@ public class DocDbQueryHandler {
             xml.start("VpcSecurityGroups").end("VpcSecurityGroups");
         }
 
+        xml.raw(tagListXml(c.getTags()));
         return xml.build();
     }
 
@@ -317,6 +372,7 @@ public class DocDbQueryHandler {
                 .elem("AvailabilityZone", config.defaultAvailabilityZone())
                 .elem("DbiResourceId", i.getDbiResourceId())
                 .elem("DBInstanceArn", i.getDbInstanceArn())
+                .raw(tagListXml(i.getTags()))
                 .build();
     }
 
@@ -331,5 +387,56 @@ public class DocDbQueryHandler {
             }
         }
         return null;
+    }
+
+    // ── Tag helpers ────────────────────────────────────────────────────────────
+
+    /**
+     * Parses Tags.member.N.Key / Tags.member.N.Value parameters into a map.
+     */
+    private static Map<String, String> extractTags(MultivaluedMap<String, String> params) {
+        Map<String, String> tags = new HashMap<>();
+        for (int i = 1; ; i++) {
+            String key = params.getFirst("Tags.member." + i + ".Key");
+            if (key == null || key.isBlank()) {
+                break;
+            }
+            String value = params.getFirst("Tags.member." + i + ".Value");
+            tags.put(key, value != null ? value : "");
+        }
+        return tags;
+    }
+
+    /**
+     * Parses TagKeys.member.N parameters into a list.
+     */
+    private static List<String> extractTagKeys(MultivaluedMap<String, String> params) {
+        List<String> keys = new java.util.ArrayList<>();
+        for (int i = 1; ; i++) {
+            String key = params.getFirst("TagKeys.member." + i);
+            if (key == null || key.isBlank()) {
+                break;
+            }
+            keys.add(key);
+        }
+        return keys;
+    }
+
+    /**
+     * Builds the TagList XML element from a tags map.
+     */
+    private static String tagListXml(Map<String, String> tags) {
+        if (tags == null || tags.isEmpty()) {
+            return new XmlBuilder().start("TagList").end("TagList").build();
+        }
+        XmlBuilder xml = new XmlBuilder().start("TagList");
+        for (Map.Entry<String, String> entry : tags.entrySet()) {
+            xml.start("member")
+               .elem("Key", entry.getKey())
+               .elem("Value", entry.getValue())
+               .end("member");
+        }
+        xml.end("TagList");
+        return xml.build();
     }
 }

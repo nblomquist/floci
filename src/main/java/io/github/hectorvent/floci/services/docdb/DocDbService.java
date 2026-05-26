@@ -15,6 +15,8 @@ import org.jboss.logging.Logger;
 
 import java.time.Instant;
 import java.util.Collection;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -63,17 +65,23 @@ public class DocDbService {
 
     // ── Subnet Groups ────────────────────────────────────────────────────────
 
-    public DocDbSubnetGroup createSubnetGroup(String name, String description) {
+    public DocDbSubnetGroup createSubnetGroup(String name, String description,
+                                               Map<String, String> initialTags) {
         if (subnetGroups.get(name).isPresent()) {
             throw new AwsException("DBSubnetGroupAlreadyExistsFault",
                     "DB subnet group " + name + " already exists.", 400);
         }
+        String region = regionResolver.getDefaultRegion();
         DocDbSubnetGroup group = new DocDbSubnetGroup();
         group.setDbSubnetGroupName(name);
         group.setDbSubnetGroupDescription(description != null ? description : "");
         group.setVpcId(DEFAULT_VPC_ID);
         group.setSubnetGroupStatus("Complete");
+        group.setDbSubnetGroupArn(regionResolver.buildArn("rds", region, "subgrp:" + name));
         group.getSubnets().add(new DocDbSubnetGroup.Subnet(DEFAULT_SUBNET_ID, DEFAULT_AZ, "Active"));
+        if (initialTags != null) {
+            group.getTags().putAll(initialTags);
+        }
         subnetGroups.put(name, group);
         LOG.infov("DB subnet group {0} created", name);
         return group;
@@ -107,7 +115,8 @@ public class DocDbService {
     // ── Clusters ─────────────────────────────────────────────────────────────
 
     public DocDbCluster createDbCluster(String id, String engineVersion, String masterUsername,
-                                        String masterPassword, String subnetGroupName) {
+                                        String masterPassword, String subnetGroupName,
+                                        Map<String, String> initialTags) {
         if (clusters.get(id).isPresent()) {
             throw new AwsException("DBClusterAlreadyExistsFault",
                     "DB cluster " + id + " already exists.", 400);
@@ -137,6 +146,9 @@ public class DocDbService {
                 .replace("-", "").substring(0, 24).toUpperCase());
         cluster.setDbSubnetGroup(subnetGroupName);
         cluster.setCreatedAt(Instant.now());
+        if (initialTags != null) {
+            cluster.getTags().putAll(initialTags);
+        }
 
         clusters.put(id, cluster);
         LOG.infov("DocumentDB cluster {0} created, endpoint={1}:{2}", id, endpointHost, 27017);
@@ -199,7 +211,8 @@ public class DocDbService {
     // ── Instances ────────────────────────────────────────────────────────────
 
     public DocDbInstance createDbInstance(String id, String dbClusterIdentifier,
-                                          String dbInstanceClass, String engineVersion) {
+                                          String dbInstanceClass, String engineVersion,
+                                          Map<String, String> initialTags) {
         if (instances.get(id).isPresent()) {
             throw new AwsException("DBInstanceAlreadyExists",
                     "DB instance " + id + " already exists.", 400);
@@ -221,6 +234,9 @@ public class DocDbService {
         instance.setDbiResourceId("db-" + UUID.randomUUID().toString()
                 .replace("-", "").substring(0, 24).toUpperCase());
         instance.setCreatedAt(Instant.now());
+        if (initialTags != null) {
+            instance.getTags().putAll(initialTags);
+        }
 
         cluster.getDbClusterMembers().add(id);
         clusters.put(dbClusterIdentifier, cluster);
@@ -268,4 +284,60 @@ public class DocDbService {
         instances.delete(id);
         LOG.infov("DocumentDB instance {0} deleted", id);
     }
+
+    // ── Tags ──────────────────────────────────────────────────────────────────
+
+    /**
+     * Resolves a resource by its ARN across all three stores.
+     * Returns a record holding the found resource and a mutator that persists
+     * changes back to the correct store.
+     */
+    private TaggedResource resolveByArn(String arn) {
+        // Check clusters
+        for (DocDbCluster c : clusters.scan(k -> true)) {
+            if (arn.equals(c.getDbClusterArn())) {
+                return new TaggedResource(arn, c.getTags(),
+                        () -> clusters.put(c.getDbClusterIdentifier(), c));
+            }
+        }
+        // Check instances
+        for (DocDbInstance i : instances.scan(k -> true)) {
+            if (arn.equals(i.getDbInstanceArn())) {
+                return new TaggedResource(arn, i.getTags(),
+                        () -> instances.put(i.getDbInstanceIdentifier(), i));
+            }
+        }
+        // Check subnet groups
+        for (DocDbSubnetGroup g : subnetGroups.scan(k -> true)) {
+            if (arn.equals(g.getDbSubnetGroupArn())) {
+                return new TaggedResource(arn, g.getTags(),
+                        () -> subnetGroups.put(g.getDbSubnetGroupName(), g));
+            }
+        }
+        throw new AwsException("InvalidParameterValue",
+                "Resource " + arn + " not found.", 400);
+    }
+
+    public Map<String, String> listTags(String arn) {
+        TaggedResource resource = resolveByArn(arn);
+        return new HashMap<>(resource.tags());
+    }
+
+    public void tagResource(String arn, Map<String, String> tags) {
+        TaggedResource resource = resolveByArn(arn);
+        resource.tags().putAll(tags);
+        resource.persist().run();
+    }
+
+    public void untagResource(String arn, List<String> tagKeys) {
+        TaggedResource resource = resolveByArn(arn);
+        tagKeys.forEach(resource.tags()::remove);
+        resource.persist().run();
+    }
+
+    private record TaggedResource(
+            String arn,
+            Map<String, String> tags,
+            Runnable persist
+    ) {}
 }

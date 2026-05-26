@@ -3,6 +3,8 @@ package io.github.hectorvent.floci.services.docdb.model;
 import io.quarkus.runtime.annotations.RegisterForReflection;
 
 import java.time.Instant;
+import java.util.HashMap;
+import java.util.Map;
 
 @RegisterForReflection
 public class DocDbInstance {
@@ -17,6 +19,7 @@ public class DocDbInstance {
     private String masterUsername;
     private String dbInstanceArn;
     private String dbiResourceId;
+    private Map<String, String> tags = new HashMap<>();
     private Instant createdAt;
 
     public DocDbInstance() {}
@@ -50,6 +53,11 @@ public class DocDbInstance {
 
     public String getDbiResourceId() { return dbiResourceId; }
     public void setDbiResourceId(String dbiResourceId) { this.dbiResourceId = dbiResourceId; }
+
+    public Map<String, String> getTags() { return tags; }
+    public void setTags(Map<String, String> tags) {
+        this.tags = tags != null ? new HashMap<>(tags) : new HashMap<>();
+    }
 
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }

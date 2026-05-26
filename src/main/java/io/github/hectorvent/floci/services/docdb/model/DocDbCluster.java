@@ -4,7 +4,9 @@ import io.quarkus.runtime.annotations.RegisterForReflection;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 @RegisterForReflection
 public class DocDbCluster {
@@ -23,6 +25,7 @@ public class DocDbCluster {
     private boolean storageEncrypted;
     private String availabilityZone;
     private List<String> dbClusterMembers = new ArrayList<>();
+    private Map<String, String> tags = new HashMap<>();
     private Instant createdAt;
 
     public DocDbCluster() {}
@@ -69,6 +72,11 @@ public class DocDbCluster {
     public List<String> getDbClusterMembers() { return dbClusterMembers; }
     public void setDbClusterMembers(List<String> dbClusterMembers) {
         this.dbClusterMembers = dbClusterMembers != null ? new ArrayList<>(dbClusterMembers) : new ArrayList<>();
+    }
+
+    public Map<String, String> getTags() { return tags; }
+    public void setTags(Map<String, String> tags) {
+        this.tags = tags != null ? new HashMap<>(tags) : new HashMap<>();
     }
 
     public Instant getCreatedAt() { return createdAt; }

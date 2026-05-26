@@ -46,6 +46,62 @@ class DocDbIntegrationTest {
     }
 
     @Test
+    void addAndListTagsRoundTripsThroughHttp() {
+        String clusterId = "docdb-int-tag-cluster";
+
+        // Create subnet group (needed for cluster creation)
+        // Use docdb-scoped auth since CreateDBSubnetGroup doesn't have Engine=docdb param
+        given()
+            .header("Authorization", AUTH)
+            .contentType(FORM)
+            .formParam("Action", "CreateDBSubnetGroup")
+            .formParam("DBSubnetGroupName", "int-tag-sg")
+            .formParam("DBSubnetGroupDescription", "integration test sg")
+        .when().post("/")
+        .then()
+            .statusCode(200);
+
+        // Create cluster — use rds-scoped auth with Engine=docdb for routing
+        given()
+            .header("Authorization", rdsAuthorization())
+            .contentType(FORM)
+            .formParam("Action", "CreateDBCluster")
+            .formParam("DBClusterIdentifier", clusterId)
+            .formParam("Engine", "docdb")
+            .formParam("DBSubnetGroupName", "int-tag-sg")
+        .when().post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<DBClusterIdentifier>" + clusterId + "</DBClusterIdentifier>"));
+
+        // AddTagsToResource — use docdb-scoped auth
+        given()
+            .header("Authorization", AUTH)
+            .contentType(FORM)
+            .formParam("Action", "AddTagsToResource")
+            .formParam("ResourceName", "arn:aws:rds:us-east-1:000000000000:cluster:" + clusterId)
+            .formParam("Tags.member.1.Key", "environment")
+            .formParam("Tags.member.1.Value", "integration")
+        .when().post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("AddTagsToResourceResponse"));
+
+        // ListTagsForResource — use docdb-scoped auth
+        given()
+            .header("Authorization", AUTH)
+            .contentType(FORM)
+            .formParam("Action", "ListTagsForResource")
+            .formParam("ResourceName", "arn:aws:rds:us-east-1:000000000000:cluster:" + clusterId)
+        .when().post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("<TagList>"))
+            .body(containsString("<Key>environment</Key>"))
+            .body(containsString("<Value>integration</Value>"));
+    }
+
+    @Test
     void healthIncludesDocDbService() {
         given()
         .when().get("/_floci/health")
