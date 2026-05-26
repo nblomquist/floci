@@ -4,9 +4,12 @@ import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.storage.InMemoryStorage;
+import io.github.hectorvent.floci.services.docdb.container.DocDbContainerHandle;
+import io.github.hectorvent.floci.services.docdb.container.DocDbContainerManager;
 import io.github.hectorvent.floci.services.docdb.model.DocDbCluster;
 import io.github.hectorvent.floci.services.docdb.model.DocDbInstance;
 import io.github.hectorvent.floci.services.docdb.model.DocDbSubnetGroup;
+import io.github.hectorvent.floci.services.docdb.proxy.DocDbProxyManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -20,17 +23,30 @@ import static org.mockito.Mockito.*;
 class DocDbServiceTest {
 
     private DocDbService service;
+    private DocDbContainerManager containerManager;
+    private DocDbProxyManager proxyManager;
     private RegionResolver regionResolver;
     private EmulatorConfig config;
 
     @BeforeEach
     void setUp() {
+        containerManager = mock(DocDbContainerManager.class);
+        proxyManager = mock(DocDbProxyManager.class);
         regionResolver = new RegionResolver("us-east-1", "123456789012");
         config = mock(EmulatorConfig.class);
+        EmulatorConfig.ServicesConfig servicesConfig = mock(EmulatorConfig.ServicesConfig.class);
+        EmulatorConfig.DocDbServiceConfig docDbConfig = mock(EmulatorConfig.DocDbServiceConfig.class);
+
+        when(config.services()).thenReturn(servicesConfig);
+        when(servicesConfig.docdb()).thenReturn(docDbConfig);
+        when(docDbConfig.proxyBasePort()).thenReturn(8300);
+        when(docDbConfig.proxyMaxPort()).thenReturn(8399);
         when(config.hostname()).thenReturn(java.util.Optional.of("localhost"));
         when(config.defaultAvailabilityZone()).thenReturn("us-east-1a");
+        when(containerManager.start(any()))
+                .thenReturn(new DocDbContainerHandle("container-id", "cluster-id", "127.0.0.1", 27017));
 
-        service = new DocDbService(config, regionResolver,
+        service = new DocDbService(config, regionResolver, containerManager, proxyManager,
                 new InMemoryStorage<>(), new InMemoryStorage<>(), new InMemoryStorage<>());
     }
 
@@ -102,11 +118,17 @@ class DocDbServiceTest {
         assertEquals("available", cluster.getStatus());
         assertEquals("4.0.0", cluster.getEngineVersion());
         assertEquals("localhost", cluster.getEndpoint());
-        assertEquals(27017, cluster.getPort());
+        assertEquals(8300, cluster.getPort());
+        assertEquals(8300, cluster.getProxyPort());
+        assertEquals("container-id", cluster.getContainerId());
+        assertEquals("127.0.0.1", cluster.getContainerHost());
+        assertEquals(27017, cluster.getContainerPort());
         assertEquals("admin", cluster.getMasterUsername());
         assertNotNull(cluster.getDbClusterResourceId());
         assertTrue(cluster.getDbClusterResourceId().startsWith("cluster-"));
         assertEquals("arn:aws:rds:us-east-1:123456789012:cluster:my-cluster", cluster.getDbClusterArn());
+        verify(containerManager).start("my-cluster");
+        verify(proxyManager).startProxy("my-cluster", 8300, "127.0.0.1", 27017);
     }
 
     @Test
@@ -132,6 +154,50 @@ class DocDbServiceTest {
         AwsException exception = assertThrows(AwsException.class,
                 () -> service.createDbCluster("c1", null, null, null, "nonexistent-sg", null));
         assertEquals("DBSubnetGroupNotFoundFault", exception.getErrorCode());
+        verifyNoInteractions(containerManager, proxyManager);
+    }
+
+    @Test
+    void createDbClusterThrowsCapacityErrorWhenProxyPortsExhausted() {
+        for (int i = 1; i <= 100; i++) {
+            service.createDbCluster("c" + i, null, null, null, null, null);
+        }
+
+        AwsException exception = assertThrows(AwsException.class,
+                () -> service.createDbCluster("c101", null, null, null, null, null));
+        assertEquals("InsufficientDBClusterCapacityFault", exception.getErrorCode());
+        verify(containerManager, never()).start("c101");
+    }
+
+    @Test
+    void createDbClusterRollsBackPortWhenContainerStartFails() {
+        when(containerManager.start("c1")).thenThrow(new RuntimeException("container failed"));
+
+        assertThrows(RuntimeException.class,
+                () -> service.createDbCluster("c1", null, null, null, null, null));
+
+        assertTrue(service.listDbClusters(null).isEmpty());
+        verify(proxyManager, never()).startProxy(eq("c1"), anyInt(), any(), anyInt());
+
+        DocDbCluster cluster = service.createDbCluster("c2", null, null, null, null, null);
+        assertEquals(8300, cluster.getPort());
+    }
+
+    @Test
+    void createDbClusterRollsBackContainerAndPortWhenProxyStartFails() {
+        DocDbContainerHandle handle = new DocDbContainerHandle("container-c1", "c1", "127.0.0.1", 27017);
+        when(containerManager.start("c1")).thenReturn(handle);
+        doThrow(new RuntimeException("proxy failed"))
+                .when(proxyManager).startProxy("c1", 8300, "127.0.0.1", 27017);
+
+        assertThrows(RuntimeException.class,
+                () -> service.createDbCluster("c1", null, null, null, null, null));
+
+        assertTrue(service.listDbClusters(null).isEmpty());
+        verify(containerManager).stop(handle);
+
+        DocDbCluster cluster = service.createDbCluster("c2", null, null, null, null, null);
+        assertEquals(8300, cluster.getPort());
     }
 
     @Test
@@ -159,19 +225,33 @@ class DocDbServiceTest {
     @Test
     void deleteDbClusterSucceeds() {
         service.createDbCluster("c1", null, null, null, null, null);
+        clearInvocations(containerManager, proxyManager);
+
         service.deleteDbCluster("c1");
+
         assertTrue(service.listDbClusters(null).isEmpty());
+        verify(proxyManager).stopProxy("c1");
+        verify(containerManager).stop(argThat(handle ->
+                "container-id".equals(handle.getContainerId())
+                        && "c1".equals(handle.getClusterId())
+                        && "127.0.0.1".equals(handle.getHost())
+                        && handle.getPort() == 27017));
+
+        DocDbCluster cluster = service.createDbCluster("c2", null, null, null, null, null);
+        assertEquals(8300, cluster.getPort());
     }
 
     @Test
     void deleteDbClusterFailsWhenMembersRemain() {
         DocDbCluster cluster = service.createDbCluster("c1", null, null, null, null, null);
         cluster.getDbClusterMembers().add("instance-1");
+        clearInvocations(containerManager, proxyManager);
 
         AwsException exception = assertThrows(AwsException.class,
                 () -> service.deleteDbCluster("c1"));
         assertEquals("InvalidDBClusterStateFault", exception.getErrorCode());
         assertTrue(exception.getMessage().contains("still has DB instances"));
+        verifyNoInteractions(containerManager, proxyManager);
     }
 
     @Test
@@ -200,10 +280,23 @@ class DocDbServiceTest {
         assertEquals("db.r5.large", instance.getDbInstanceClass());
         assertEquals("available", instance.getStatus());
         assertEquals("localhost", instance.getEndpoint());
-        assertEquals(27017, instance.getPort());
+        assertEquals(8300, instance.getPort());
         assertNotNull(instance.getDbiResourceId());
         assertTrue(instance.getDbiResourceId().startsWith("db-"));
         assertEquals("arn:aws:rds:us-east-1:123456789012:db:i1", instance.getDbInstanceArn());
+    }
+
+    @Test
+    void createDbInstanceIsMetadataOnlyAndSharesClusterEndpoint() {
+        DocDbCluster cluster = service.createDbCluster("c1", null, null, null, null, null);
+        clearInvocations(containerManager, proxyManager);
+
+        DocDbInstance instance = service.createDbInstance("i1", "c1", null, null, null);
+
+        assertEquals(cluster.getEndpoint(), instance.getEndpoint());
+        assertEquals(cluster.getPort(), instance.getPort());
+        assertTrue(service.getDbCluster("c1").getDbClusterMembers().contains("i1"));
+        verifyNoInteractions(containerManager, proxyManager);
     }
 
     @Test

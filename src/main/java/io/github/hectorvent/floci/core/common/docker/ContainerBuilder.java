@@ -82,6 +82,7 @@ public class ContainerBuilder {
         private String workingDir;
         private Long memoryBytes;
         private final Map<Integer, Integer> portBindings = new HashMap<>();
+        private String portBindingHost;
         private final List<Integer> exposedPorts = new ArrayList<>();
         private String networkMode;
         private final List<Mount> mounts = new ArrayList<>();
@@ -179,6 +180,15 @@ public class ContainerBuilder {
         public Builder withPortBinding(int containerPort, int hostPort) {
             this.portBindings.put(containerPort, hostPort);
             this.exposedPorts.add(containerPort);
+            return this;
+        }
+
+        /**
+         * Sets the host/IP address Docker should bind published ports to.
+         * Leave unset to use Docker's default wildcard binding.
+         */
+        public Builder withPortBindingHost(String host) {
+            this.portBindingHost = host;
             return this;
         }
 
@@ -337,6 +347,7 @@ public class ContainerBuilder {
                     entrypoint != null ? List.copyOf(entrypoint) : null,
                     memoryBytes,
                     Map.copyOf(portBindings),
+                    portBindingHost,
                     List.copyOf(exposedPorts),
                     networkMode,
                     List.copyOf(mounts),

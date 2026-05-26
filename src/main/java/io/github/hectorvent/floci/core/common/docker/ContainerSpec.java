@@ -18,6 +18,7 @@ import java.util.Map;
  * @param entrypoint Entrypoint to use (overrides image ENTRYPOINT)
  * @param memoryBytes Memory limit in bytes (null = no limit)
  * @param portBindings Map of container port to host port (0 = dynamic allocation)
+ * @param portBindingHost Optional host/IP to bind published ports to (null = Docker default)
  * @param exposedPorts Ports to expose (required for port bindings)
  * @param networkMode Docker network name or mode (null = default bridge)
  * @param mounts Volume mounts (named volumes, bind mounts, tmpfs)
@@ -36,6 +37,7 @@ public record ContainerSpec(
         List<String> entrypoint,
         Long memoryBytes,
         Map<Integer, Integer> portBindings,
+        String portBindingHost,
         List<Integer> exposedPorts,
         String networkMode,
         List<Mount> mounts,
@@ -51,7 +53,33 @@ public record ContainerSpec(
      * All other fields will be null or empty lists.
      */
     public ContainerSpec(String image) {
-        this(image, null, List.of(), null, null, null, Map.of(), List.of(), null, List.of(), List.of(), List.of(), null, false, List.of(), null);
+        this(image, null, List.of(), null, null, null, Map.of(), null, List.of(), null, List.of(), List.of(), List.of(), null, false, List.of(), null);
+    }
+
+    /**
+     * Creates a full spec without port binding host (backward-compatible with
+     * the pre-DocDB 16-parameter constructor).
+     */
+    public ContainerSpec(
+            String image,
+            String name,
+            List<String> env,
+            List<String> cmd,
+            List<String> entrypoint,
+            Long memoryBytes,
+            Map<Integer, Integer> portBindings,
+            List<Integer> exposedPorts,
+            String networkMode,
+            List<Mount> mounts,
+            List<Bind> binds,
+            List<String> extraHosts,
+            LogConfig logConfig,
+            boolean privileged,
+            List<String> dnsServers,
+            String workingDir) {
+        this(image, name, env, cmd, entrypoint, memoryBytes, portBindings, null,
+                exposedPorts, networkMode, mounts, binds, extraHosts, logConfig,
+                privileged, dnsServers, workingDir);
     }
 
     /**

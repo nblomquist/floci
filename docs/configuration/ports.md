@@ -9,6 +9,7 @@
 | `6379–6399` | TCP | ElastiCache Redis proxy (inside Floci) | Yes |
 | `6500–6599` | HTTPS | EKS k3s API server — bound directly by each k3s container | **No** |
 | `7001–7099` | TCP | RDS proxy (inside Floci) | Yes |
+| `8300–8399` | TCP | DocumentDB MongoDB proxy (inside Floci) | Yes |
 | `9200–9299` | HTTP | Lambda Runtime API (internal, Docker-network only) | **No** |
 | `9400–9499` | HTTP | OpenSearch data-plane — bound directly by each OpenSearch container | **No** |
 
@@ -16,7 +17,7 @@
 
 There are two distinct patterns Floci uses to expose container ports:
 
-### Proxy-in-Floci (ElastiCache, RDS)
+### Proxy-in-Floci (ElastiCache, RDS, DocumentDB)
 
 Floci runs a **TCP proxy process inside its own container**. The proxy listens on the host port and forwards traffic to the backend container.
 
@@ -105,6 +106,25 @@ psql -h localhost -p 7001 -U admin
 !!! note
     Configure the range with `FLOCI_SERVICES_RDS_PROXY_BASE_PORT` and `FLOCI_SERVICES_RDS_PROXY_MAX_PORT`.
 
+## Ports 8300–8399 — DocumentDB
+
+When you create a DocumentDB cluster, Floci starts a MongoDB Docker container and creates a TCP proxy on the next available port in the `8300–8399` range. The proxy runs inside the Floci container, so this range must be mapped in `docker-compose.yml`.
+
+```bash
+aws docdb create-db-cluster \
+  --db-cluster-identifier my-docdb \
+  --engine docdb \
+  --master-username admin \
+  --master-user-password secret \
+  --endpoint-url http://localhost:4566
+
+# Connect using the proxied port returned in DescribeDBClusters Endpoint/Port fields.
+mongosh --host localhost --port 8300
+```
+
+!!! note
+    Configure the range with `FLOCI_SERVICES_DOCDB_PROXY_BASE_PORT` and `FLOCI_SERVICES_DOCDB_PROXY_MAX_PORT`.
+
 ## Ports 9200–9299 — Lambda Runtime API (internal)
 
 Floci binds a Runtime API port in `9200–9299` for each warm Lambda container to poll. These ports are consumed by containers on the shared Docker network only — they are never accessed from the host and must **not** be mapped in `docker-compose.yml`.
@@ -145,7 +165,7 @@ host:5100  ←──  floci-ecr-registry (registry:2 container, started by Floci
 
 ## Exposing Ports in Docker Compose
 
-Only the proxy-based services (ElastiCache and RDS) need port mappings in `docker-compose.yml`. Direct-binding services (ECR, EKS, OpenSearch) bind their ports on the host automatically via Docker:
+Only the proxy-based services (ElastiCache, RDS, and DocumentDB) need port mappings in `docker-compose.yml`. Direct-binding services (ECR, EKS, OpenSearch) bind their ports on the host automatically via Docker:
 
 ```yaml
 services:
@@ -155,6 +175,7 @@ services:
       - "4566:4566"           # All AWS API calls
       - "6379-6399:6379-6399" # ElastiCache / Redis proxy (proxy in Floci)
       - "7001-7099:7001-7099" # RDS proxy (proxy in Floci)
+      - "8300-8399:8300-8399" # DocumentDB proxy (proxy in Floci)
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
 ```

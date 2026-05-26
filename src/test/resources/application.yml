@@ -101,6 +101,9 @@ floci:
       default-mariadb-image: "mariadb:11"
     docdb:
       enabled: true
+      proxy-base-port: 8300
+      proxy-max-port: 8399
+      default-image: "mongodb/mongodb-community-server:8.0-ubi9-slim"
     neptune:
       enabled: true
       proxy-base-port: 8182

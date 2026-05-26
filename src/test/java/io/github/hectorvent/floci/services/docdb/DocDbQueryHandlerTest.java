@@ -31,7 +31,6 @@ class DocDbQueryHandlerTest {
         service = mock(DocDbService.class);
         EmulatorConfig config = mock(EmulatorConfig.class);
         EmulatorConfig.ServicesConfig servicesConfig = mock(EmulatorConfig.ServicesConfig.class);
-        EmulatorConfig.DocDbServiceConfig docdbConfig = mock(EmulatorConfig.DocDbServiceConfig.class);
         when(config.services()).thenReturn(servicesConfig);
         when(config.defaultAvailabilityZone()).thenReturn("us-east-1a");
         handler = new DocDbQueryHandler(service, config);

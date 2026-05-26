@@ -6,9 +6,12 @@ import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
+import io.github.hectorvent.floci.services.docdb.container.DocDbContainerHandle;
+import io.github.hectorvent.floci.services.docdb.container.DocDbContainerManager;
 import io.github.hectorvent.floci.services.docdb.model.DocDbCluster;
 import io.github.hectorvent.floci.services.docdb.model.DocDbInstance;
 import io.github.hectorvent.floci.services.docdb.model.DocDbSubnetGroup;
+import io.github.hectorvent.floci.services.docdb.proxy.DocDbProxyManager;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
@@ -18,7 +21,9 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 @ApplicationScoped
 public class DocDbService {
@@ -35,13 +40,20 @@ public class DocDbService {
     private final StorageBackend<String, DocDbSubnetGroup> subnetGroups;
     private final EmulatorConfig config;
     private final RegionResolver regionResolver;
+    private final DocDbContainerManager containerManager;
+    private final DocDbProxyManager proxyManager;
+    private final Set<Integer> usedPorts = ConcurrentHashMap.newKeySet();
 
     @Inject
     public DocDbService(EmulatorConfig config,
                         RegionResolver regionResolver,
+                        DocDbContainerManager containerManager,
+                        DocDbProxyManager proxyManager,
                         StorageFactory storageFactory) {
         this.config = config;
         this.regionResolver = regionResolver;
+        this.containerManager = containerManager;
+        this.proxyManager = proxyManager;
         this.clusters = storageFactory.create("docdb", "docdb-clusters.json",
                 new TypeReference<Map<String, DocDbCluster>>() {});
         this.instances = storageFactory.create("docdb", "docdb-instances.json",
@@ -53,11 +65,15 @@ public class DocDbService {
     // Package-private constructor for test injection
     DocDbService(EmulatorConfig config,
                  RegionResolver regionResolver,
+                 DocDbContainerManager containerManager,
+                 DocDbProxyManager proxyManager,
                  StorageBackend<String, DocDbCluster> clusters,
                  StorageBackend<String, DocDbInstance> instances,
                  StorageBackend<String, DocDbSubnetGroup> subnetGroups) {
         this.config = config;
         this.regionResolver = regionResolver;
+        this.containerManager = containerManager;
+        this.proxyManager = proxyManager;
         this.clusters = clusters;
         this.instances = instances;
         this.subnetGroups = subnetGroups;
@@ -129,6 +145,26 @@ public class DocDbService {
 
         String region = regionResolver.getDefaultRegion();
         String endpointHost = config.hostname().orElse("localhost");
+        int proxyPort = allocateProxyPort();
+        DocDbContainerHandle handle;
+        try {
+            handle = containerManager.start(id);
+        } catch (RuntimeException e) {
+            releaseProxyPort(proxyPort);
+            throw e;
+        }
+
+        try {
+            proxyManager.startProxy(id, proxyPort, handle.getHost(), handle.getPort());
+        } catch (RuntimeException e) {
+            try {
+                containerManager.stop(handle);
+            } catch (RuntimeException cleanupException) {
+                LOG.warnv(cleanupException, "Failed to stop DocDB container during rollback for cluster {0}", id);
+            }
+            releaseProxyPort(proxyPort);
+            throw e;
+        }
 
         DocDbCluster cluster = new DocDbCluster();
         cluster.setDbClusterIdentifier(id);
@@ -136,7 +172,7 @@ public class DocDbService {
         cluster.setEngineVersion(engineVersion != null ? engineVersion : ENGINE_VERSION_DEFAULT);
         cluster.setEndpoint(endpointHost);
         cluster.setReaderEndpoint(endpointHost);
-        cluster.setPort(27017);
+        cluster.setPort(proxyPort);
         cluster.setMasterUsername(masterUsername != null ? masterUsername : "admin");
         cluster.setMultiAz(false);
         cluster.setStorageEncrypted(true);
@@ -146,12 +182,16 @@ public class DocDbService {
                 .replace("-", "").substring(0, 24).toUpperCase());
         cluster.setDbSubnetGroup(subnetGroupName);
         cluster.setCreatedAt(Instant.now());
+        cluster.setContainerId(handle.getContainerId());
+        cluster.setContainerHost(handle.getHost());
+        cluster.setContainerPort(handle.getPort());
+        cluster.setProxyPort(proxyPort);
         if (initialTags != null) {
             cluster.getTags().putAll(initialTags);
         }
 
         clusters.put(id, cluster);
-        LOG.infov("DocumentDB cluster {0} created, endpoint={1}:{2}", id, endpointHost, 27017);
+        LOG.infov("DocumentDB cluster {0} created, endpoint={1}:{2}", id, endpointHost, proxyPort);
         return cluster;
     }
 
@@ -204,6 +244,16 @@ public class DocDbService {
 
         cluster.setStatus("deleting");
         clusters.put(id, cluster);
+
+        proxyManager.stopProxy(id);
+
+        if (cluster.getContainerId() != null) {
+            containerManager.stop(new DocDbContainerHandle(
+                    cluster.getContainerId(), id,
+                    cluster.getContainerHost(), cluster.getContainerPort()));
+        }
+
+        releaseProxyPort(cluster.getProxyPort());
         clusters.delete(id);
         LOG.infov("DocumentDB cluster {0} deleted", id);
     }
@@ -340,4 +390,20 @@ public class DocDbService {
             Map<String, String> tags,
             Runnable persist
     ) {}
+
+    private int allocateProxyPort() {
+        int base = config.services().docdb().proxyBasePort();
+        int max = config.services().docdb().proxyMaxPort();
+        for (int port = base; port <= max; port++) {
+            if (usedPorts.add(port)) {
+                return port;
+            }
+        }
+        throw new AwsException("InsufficientDBClusterCapacityFault",
+                "No available proxy ports in range " + base + "-" + max, 503);
+    }
+
+    private void releaseProxyPort(int port) {
+        usedPorts.remove(port);
+    }
 }

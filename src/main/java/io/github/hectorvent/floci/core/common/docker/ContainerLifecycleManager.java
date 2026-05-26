@@ -384,7 +384,10 @@ public class ContainerLifecycleManager {
                     hostPort = portAllocator.allocateAny();
                 }
 
-                ports.bind(ExposedPort.tcp(containerPort), Ports.Binding.bindPort(hostPort));
+                Ports.Binding binding = spec.portBindingHost() != null && !spec.portBindingHost().isBlank()
+                        ? Ports.Binding.bindIpAndPort(spec.portBindingHost(), hostPort)
+                        : Ports.Binding.bindPort(hostPort);
+                ports.bind(ExposedPort.tcp(containerPort), binding);
                 LOG.debugv("Port binding: {0} -> {1}", containerPort, hostPort);
             }
             hostConfig.withPortBindings(ports);

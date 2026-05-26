@@ -27,6 +27,10 @@ public class DocDbCluster {
     private List<String> dbClusterMembers = new ArrayList<>();
     private Map<String, String> tags = new HashMap<>();
     private Instant createdAt;
+    private String containerId;
+    private String containerHost;
+    private int containerPort;
+    private int proxyPort;
 
     public DocDbCluster() {}
 
@@ -81,4 +85,16 @@ public class DocDbCluster {
 
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
+
+    public String getContainerId() { return containerId; }
+    public void setContainerId(String containerId) { this.containerId = containerId; }
+
+    public String getContainerHost() { return containerHost; }
+    public void setContainerHost(String containerHost) { this.containerHost = containerHost; }
+
+    public int getContainerPort() { return containerPort; }
+    public void setContainerPort(int containerPort) { this.containerPort = containerPort; }
+
+    public int getProxyPort() { return proxyPort; }
+    public void setProxyPort(int proxyPort) { this.proxyPort = proxyPort; }
 }

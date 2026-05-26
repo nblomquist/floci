@@ -489,6 +489,20 @@ public interface EmulatorConfig {
     interface DocDbServiceConfig {
         @WithDefault("true")
         boolean enabled();
+
+        /** Base port of the proxy port range. First cluster gets this port. */
+        @WithDefault("8300")
+        int proxyBasePort();
+
+        /** Inclusive upper bound of the proxy port range. */
+        @WithDefault("8399")
+        int proxyMaxPort();
+
+        @WithDefault("mongodb/mongodb-community-server:8.0-ubi9-slim")
+        String defaultImage();
+
+        /** Docker network to attach DB containers to. Empty = default bridge. */
+        Optional<String> dockerNetwork();
     }
 
     interface NeptuneServiceConfig {

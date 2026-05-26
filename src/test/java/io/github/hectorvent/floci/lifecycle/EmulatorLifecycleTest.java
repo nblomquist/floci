@@ -3,9 +3,10 @@ package io.github.hectorvent.floci.lifecycle;
 import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.core.common.ServiceRegistry;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
-import io.github.hectorvent.floci.lifecycle.InitLifecycleState;
 import io.github.hectorvent.floci.lifecycle.inithook.InitializationHook;
 import io.github.hectorvent.floci.lifecycle.inithook.InitializationHooksRunner;
+import io.github.hectorvent.floci.services.docdb.container.DocDbContainerManager;
+import io.github.hectorvent.floci.services.docdb.proxy.DocDbProxyManager;
 import io.github.hectorvent.floci.services.elasticache.container.ElastiCacheContainerManager;
 import io.github.hectorvent.floci.services.elasticache.container.ElastiCacheMemcachedContainerManager;
 import io.github.hectorvent.floci.services.elasticache.proxy.ElastiCacheProxyManager;
@@ -45,6 +46,8 @@ class EmulatorLifecycleTest {
     @Mock private EmulatorConfig.StorageConfig storageConfig;
     @Mock private EmulatorConfig.ServicesConfig servicesConfig;
     @Mock private EmulatorConfig.Ec2ServiceConfig ec2ServiceConfig;
+    @Mock private DocDbProxyManager docDbProxyManager;
+    @Mock private DocDbContainerManager docDbContainerManager;
     @Mock private ElastiCacheContainerManager elastiCacheContainerManager;
     @Mock private ElastiCacheMemcachedContainerManager elastiCacheMemcachedContainerManager;
     @Mock private ElastiCacheProxyManager elastiCacheProxyManager;
@@ -71,6 +74,7 @@ class EmulatorLifecycleTest {
 
         emulatorLifecycle = new EmulatorLifecycle(
                 storageFactory, serviceRegistry, config,
+                docDbProxyManager, docDbContainerManager,
                 elastiCacheContainerManager, elastiCacheMemcachedContainerManager,
                 elastiCacheProxyManager, rdsContainerManager, rdsProxyManager,
                 initializationHooksRunner, sqsPoller, kinesisPoller, dynamodbStreamsPoller,
@@ -184,6 +188,8 @@ class EmulatorLifecycleTest {
         verify(initializationHooksRunner).run(InitializationHook.STOP);
         // Resource cleanup must NOT happen in pre-shutdown; it belongs to ShutdownEvent.
         verify(storageFactory, never()).shutdownAll();
+        verify(docDbProxyManager, never()).stopAll();
+        verify(docDbContainerManager, never()).stopAll();
         verify(elastiCacheProxyManager, never()).stopAll();
         verify(rdsProxyManager, never()).stopAll();
     }
@@ -231,11 +237,23 @@ class EmulatorLifecycleTest {
     void shouldCleanUpResourcesOnShutdownWithoutRunningHooks() throws IOException, InterruptedException {
         emulatorLifecycle.onStop(Mockito.mock(ShutdownEvent.class));
 
-        verify(elastiCacheProxyManager).stopAll();
-        verify(rdsProxyManager).stopAll();
-        verify(elastiCacheContainerManager).stopAll();
-        verify(rdsContainerManager).stopAll();
-        verify(storageFactory).shutdownAll();
+        var inOrder = Mockito.inOrder(
+                elastiCacheProxyManager,
+                rdsProxyManager,
+                docDbProxyManager,
+                elastiCacheContainerManager,
+                elastiCacheMemcachedContainerManager,
+                rdsContainerManager,
+                docDbContainerManager,
+                storageFactory);
+        inOrder.verify(elastiCacheProxyManager).stopAll();
+        inOrder.verify(rdsProxyManager).stopAll();
+        inOrder.verify(docDbProxyManager).stopAll();
+        inOrder.verify(elastiCacheContainerManager).stopAll();
+        inOrder.verify(elastiCacheMemcachedContainerManager).stopAll();
+        inOrder.verify(rdsContainerManager).stopAll();
+        inOrder.verify(docDbContainerManager).stopAll();
+        inOrder.verify(storageFactory).shutdownAll();
         // Hooks are handled by onPreShutdown, never from ShutdownEvent.
         verify(initializationHooksRunner, never()).run(InitializationHook.STOP);
     }
@@ -249,10 +267,22 @@ class EmulatorLifecycleTest {
         emulatorLifecycle.onStop(Mockito.mock(ShutdownEvent.class));
 
         verify(initializationHooksRunner).run(InitializationHook.STOP);
-        verify(elastiCacheProxyManager).stopAll();
-        verify(rdsProxyManager).stopAll();
-        verify(elastiCacheContainerManager).stopAll();
-        verify(rdsContainerManager).stopAll();
-        verify(storageFactory).shutdownAll();
+        var inOrder = Mockito.inOrder(
+                elastiCacheProxyManager,
+                rdsProxyManager,
+                docDbProxyManager,
+                elastiCacheContainerManager,
+                elastiCacheMemcachedContainerManager,
+                rdsContainerManager,
+                docDbContainerManager,
+                storageFactory);
+        inOrder.verify(elastiCacheProxyManager).stopAll();
+        inOrder.verify(rdsProxyManager).stopAll();
+        inOrder.verify(docDbProxyManager).stopAll();
+        inOrder.verify(elastiCacheContainerManager).stopAll();
+        inOrder.verify(elastiCacheMemcachedContainerManager).stopAll();
+        inOrder.verify(rdsContainerManager).stopAll();
+        inOrder.verify(docDbContainerManager).stopAll();
+        inOrder.verify(storageFactory).shutdownAll();
     }
 }

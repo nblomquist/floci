@@ -9,6 +9,7 @@ import io.github.hectorvent.floci.services.elbv2.ElbV2QueryHandler;
 import io.github.hectorvent.floci.services.cloudwatch.metrics.CloudWatchMetricsQueryHandler;
 import io.github.hectorvent.floci.services.cognito.CognitoJsonHandler;
 import io.github.hectorvent.floci.services.docdb.DocDbQueryHandler;
+import io.github.hectorvent.floci.services.docdb.DocDbService;
 import io.github.hectorvent.floci.services.elasticache.ElastiCacheQueryHandler;
 import io.github.hectorvent.floci.services.iam.IamQueryHandler;
 import io.github.hectorvent.floci.services.iam.StsQueryHandler;
@@ -166,6 +167,7 @@ public class AwsQueryController {
     private final ElastiCacheQueryHandler elastiCacheQueryHandler;
     private final RdsQueryHandler rdsQueryHandler;
     private final DocDbQueryHandler docDbQueryHandler;
+    private final DocDbService docDbService;
     private final NeptuneQueryHandler neptuneQueryHandler;
     private final NeptuneService neptuneService;
     private final SqsQueryHandler sqsQueryHandler;
@@ -183,10 +185,11 @@ public class AwsQueryController {
 
     @Inject
     public AwsQueryController(CloudFormationQueryHandler cloudFormationQueryHandler,
-                               ElastiCacheQueryHandler elastiCacheQueryHandler,
-                               RdsQueryHandler rdsQueryHandler,
-                               DocDbQueryHandler docDbQueryHandler,
-                               NeptuneQueryHandler neptuneQueryHandler,
+                                ElastiCacheQueryHandler elastiCacheQueryHandler,
+                                RdsQueryHandler rdsQueryHandler,
+                                DocDbQueryHandler docDbQueryHandler,
+                                DocDbService docDbService,
+                                NeptuneQueryHandler neptuneQueryHandler,
                               NeptuneService neptuneService,
                               SqsQueryHandler sqsQueryHandler, SnsQueryHandler snsQueryHandler,
                               SesQueryHandler sesQueryHandler,
@@ -202,6 +205,7 @@ public class AwsQueryController {
         this.elastiCacheQueryHandler = elastiCacheQueryHandler;
         this.rdsQueryHandler = rdsQueryHandler;
         this.docDbQueryHandler = docDbQueryHandler;
+        this.docDbService = docDbService;
         this.neptuneQueryHandler = neptuneQueryHandler;
         this.neptuneService = neptuneService;
         this.sqsQueryHandler = sqsQueryHandler;
@@ -254,7 +258,10 @@ public class AwsQueryController {
                         || neptuneService.hasInstance(instanceId)) {
                     yield neptuneQueryHandler.handle(action, formParams);
                 }
-                if ("docdb".equalsIgnoreCase(engine)) {
+                if ("docdb".equalsIgnoreCase(engine)
+                        || docDbService.hasCluster(clusterId)
+                        || docDbService.hasInstance(instanceId)
+                        || DOCDB_ONLY_ACTIONS.contains(action)) {
                     yield docDbQueryHandler.handle(action, formParams);
                 }
                 yield rdsQueryHandler.handle(action, formParams);
@@ -320,6 +327,11 @@ public class AwsQueryController {
             "CreateDBCluster", "DescribeDBClusters", "DeleteDBCluster", "ModifyDBCluster",
             "CreateDBParameterGroup", "DescribeDBParameterGroups",
             "DeleteDBParameterGroup", "ModifyDBParameterGroup", "DescribeDBParameters"
+    );
+
+    /** DocDB actions that RDS does not support — route to DocDB even without Engine param. */
+    private static final Set<String> DOCDB_ONLY_ACTIONS = Set.of(
+            "CreateDBSubnetGroup", "DescribeDBSubnetGroups", "DeleteDBSubnetGroup"
     );
 
     private static final Set<String> CLOUDFORMATION_ACTIONS = Set.of(

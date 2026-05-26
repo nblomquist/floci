@@ -6,6 +6,8 @@ import io.github.hectorvent.floci.core.storage.StorageFactory;
 import io.github.hectorvent.floci.lifecycle.inithook.InitializationHook;
 import io.github.hectorvent.floci.lifecycle.inithook.InitializationHooksRunner;
 import io.github.hectorvent.floci.services.ec2.Ec2MetadataServer;
+import io.github.hectorvent.floci.services.docdb.container.DocDbContainerManager;
+import io.github.hectorvent.floci.services.docdb.proxy.DocDbProxyManager;
 import io.github.hectorvent.floci.services.elasticache.container.ElastiCacheContainerManager;
 import io.github.hectorvent.floci.services.elasticache.container.ElastiCacheMemcachedContainerManager;
 import io.github.hectorvent.floci.services.elasticache.proxy.ElastiCacheProxyManager;
@@ -43,6 +45,8 @@ public class EmulatorLifecycle {
     private final StorageFactory storageFactory;
     private final ServiceRegistry serviceRegistry;
     private final EmulatorConfig config;
+    private final DocDbProxyManager docDbProxyManager;
+    private final DocDbContainerManager docDbContainerManager;
     private final ElastiCacheContainerManager elastiCacheContainerManager;
     private final ElastiCacheMemcachedContainerManager elastiCacheMemcachedContainerManager;
     private final ElastiCacheProxyManager elastiCacheProxyManager;
@@ -58,11 +62,13 @@ public class EmulatorLifecycle {
 
     @Inject
     public EmulatorLifecycle(StorageFactory storageFactory, ServiceRegistry serviceRegistry,
-                             EmulatorConfig config,
-                             ElastiCacheContainerManager elastiCacheContainerManager,
-                             ElastiCacheMemcachedContainerManager elastiCacheMemcachedContainerManager,
-                             ElastiCacheProxyManager elastiCacheProxyManager,
-                             RdsContainerManager rdsContainerManager,
+                              EmulatorConfig config,
+                              DocDbProxyManager docDbProxyManager,
+                              DocDbContainerManager docDbContainerManager,
+                              ElastiCacheContainerManager elastiCacheContainerManager,
+                              ElastiCacheMemcachedContainerManager elastiCacheMemcachedContainerManager,
+                              ElastiCacheProxyManager elastiCacheProxyManager,
+                              RdsContainerManager rdsContainerManager,
                              RdsProxyManager rdsProxyManager,
                              InitializationHooksRunner initializationHooksRunner,
                              SqsEventSourcePoller sqsPoller,
@@ -74,6 +80,8 @@ public class EmulatorLifecycle {
         this.storageFactory = storageFactory;
         this.serviceRegistry = serviceRegistry;
         this.config = config;
+        this.docDbProxyManager = docDbProxyManager;
+        this.docDbContainerManager = docDbContainerManager;
         this.elastiCacheContainerManager = elastiCacheContainerManager;
         this.elastiCacheMemcachedContainerManager = elastiCacheMemcachedContainerManager;
         this.elastiCacheProxyManager = elastiCacheProxyManager;
@@ -183,9 +191,11 @@ public class EmulatorLifecycle {
         }
         elastiCacheProxyManager.stopAll();
         rdsProxyManager.stopAll();
+        docDbProxyManager.stopAll();
         elastiCacheContainerManager.stopAll();
         elastiCacheMemcachedContainerManager.stopAll();
         rdsContainerManager.stopAll();
+        docDbContainerManager.stopAll();
         storageFactory.shutdownAll();
 
         LOG.info("=== AWS Local Emulator Stopped ===");

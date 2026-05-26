@@ -45,9 +45,9 @@ volumes:
   floci-data:
 ```
 
-### With ElastiCache and RDS
+### With ElastiCache, RDS, and DocumentDB
 
-ElastiCache and RDS proxy TCP connections to real Docker containers. Those containers' ports must be reachable from your host, so additional port ranges are exposed. The Docker socket is required for Floci to manage those containers:
+ElastiCache, RDS, and DocumentDB proxy TCP connections to real Docker containers. Those proxy ports must be reachable from your host, so additional port ranges are exposed. The Docker socket is required for Floci to manage those containers:
 
 ```yaml title="docker-compose.yml"
 services:
@@ -57,6 +57,7 @@ services:
       - "4566:4566"
       - "6379-6399:6379-6399"  # ElastiCache proxy ports
       - "7001-7099:7001-7099"  # RDS proxy ports
+      - "8300-8399:8300-8399"  # DocumentDB proxy ports
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - floci-data:/app/data
@@ -71,7 +72,7 @@ volumes:
 ```
 
 !!! warning "Docker socket"
-    Lambda, ElastiCache, RDS, OpenSearch, and MSK require access to the Docker socket (`/var/run/docker.sock`) to spawn and manage containers. If you don't use these services, you can omit that volume.
+    Lambda, ElastiCache, RDS, DocumentDB, OpenSearch, and MSK require access to the Docker socket (`/var/run/docker.sock`) to spawn and manage containers. If you don't use these services, you can omit that volume.
 
 !!! note "ECR port"
     ECR is backed by a `registry:2` sidecar container (`floci-ecr-registry`) that Floci starts and manages. That container binds its own host port (default `5100`) directly — do not add `5100-5199` to the Floci service's `ports` list. See [Ports Reference → ECR](./ports.md#ports-51005199--ecr-registry).
@@ -172,7 +173,7 @@ The most frequently set variables when running Floci as a Docker image:
 | `FLOCI_DEFAULT_ACCOUNT_ID` | `000000000000` | AWS account ID used in ARNs |
 | `FLOCI_STORAGE_MODE` | `memory` | `memory`, `persistent`, `hybrid`, or `wal` |
 | `FLOCI_STORAGE_PERSISTENT_PATH` | `./data` | Directory for persistent storage |
-| `FLOCI_SERVICES_DOCKER_NETWORK` | _(none)_ | Docker network for spawned containers (Lambda, ElastiCache, RDS, OpenSearch, MSK) |
+| `FLOCI_SERVICES_DOCKER_NETWORK` | _(none)_ | Docker network for spawned containers (Lambda, ElastiCache, RDS, DocumentDB, OpenSearch, MSK) |
 | `FLOCI_AUTH_VALIDATE_SIGNATURES` | `false` | Verify AWS request signatures |
 | `FLOCI_SERVICES_LAMBDA_EPHEMERAL` | `false` | Remove Lambda containers after each invocation |
 
