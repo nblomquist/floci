@@ -317,6 +317,26 @@ public class KmsService {
         return paginateGrants(sortedGrants, marker, limit);
     }
 
+    public void revokeGrant(String keyId, String grantId, String region) {
+        if (keyId == null || keyId.isBlank()) {
+            throw new AwsException("ValidationException", "KeyId is required", 400);
+        }
+        if (grantId == null || grantId.isBlank()) {
+            throw new AwsException("ValidationException", "GrantId is required", 400);
+        }
+
+        // Resolve the key to validate it exists
+        resolveKey(keyId, region);
+
+        String storageKey = region + "::" + grantId;
+        if (grantStore.get(storageKey).isEmpty()) {
+            throw new AwsException("NotFoundException", "Grant not found: " + grantId, 400);
+        }
+
+        grantStore.delete(storageKey);
+        LOG.infov("Revoked KMS grant: {0} for key {1} in {2}", grantId, keyId, region);
+    }
+
     private Map<String, Object> paginateGrants(List<KmsGrant> sortedGrants, String marker, Integer limit) {
         int effectiveLimit = limit != null ? Math.clamp(limit, 1, MAX_GRANT_LIMIT) : DEFAULT_GRANT_LIMIT;
 
