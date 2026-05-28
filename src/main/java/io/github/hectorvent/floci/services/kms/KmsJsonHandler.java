@@ -168,6 +168,9 @@ public class KmsJsonHandler {
             @SuppressWarnings("unchecked")
             List<String> operationValues = (List<String>) grant.get("Operations");
             operationValues.forEach(operations::add);
+            if (grant.get("RetiringPrincipal") != null) {
+                entry.put("RetiringPrincipal", (String) grant.get("RetiringPrincipal"));
+            }
         }
         response.put("Truncated", (boolean) result.get("Truncated"));
         if (Boolean.TRUE.equals(result.get("Truncated"))) {
