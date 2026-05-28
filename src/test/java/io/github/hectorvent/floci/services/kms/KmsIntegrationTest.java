@@ -351,4 +351,108 @@ class KmsIntegrationTest {
                 .body("Grants[0].RetiringPrincipal", equalTo("arn:aws:iam::000000000000:role/retirer"))
                 .body("Truncated", equalTo(false));
     }
+
+    // ──────────────────────────── Phase 5: RevokeGrant ────────────────────────────
+
+    @Test
+    void createRevokeAndListGrantsRoundTripThroughJsonHandler() {
+        String keyId = given()
+                .header("X-Amz-Target", "TrentService.CreateKey")
+                .contentType(KMS_CONTENT_TYPE)
+                .body("{\"Description\":\"revoke-round-trip\"}")
+                .when().post("/")
+                .then().statusCode(200)
+                .extract().path("KeyMetadata.KeyId");
+
+        String grantId = given()
+                .header("X-Amz-Target", "TrentService.CreateGrant")
+                .contentType(KMS_CONTENT_TYPE)
+                .body("""
+                        {
+                            "KeyId": "%s",
+                            "GranteePrincipal": "arn:aws:iam::000000000000:user/grantee",
+                            "Operations": ["Encrypt", "Decrypt"]
+                        }
+                        """.formatted(keyId))
+                .when().post("/")
+                .then().statusCode(200)
+                .body("GrantId", notNullValue())
+                .body("GrantToken", notNullValue())
+                .extract().path("GrantId");
+
+        // Grant is listed before revoke
+        given()
+                .header("X-Amz-Target", "TrentService.ListGrants")
+                .contentType(KMS_CONTENT_TYPE)
+                .body("{\"KeyId\":\"" + keyId + "\"}")
+                .when().post("/")
+                .then()
+                .statusCode(200)
+                .body("Grants.size()", equalTo(1))
+                .body("Grants[0].GrantId", equalTo(grantId));
+
+        // Revoke the grant
+        given()
+                .header("X-Amz-Target", "TrentService.RevokeGrant")
+                .contentType(KMS_CONTENT_TYPE)
+                .body("{\"KeyId\":\"" + keyId + "\",\"GrantId\":\"" + grantId + "\"}")
+                .when().post("/")
+                .then()
+                .statusCode(200);
+
+        // Grant is gone after revoke
+        given()
+                .header("X-Amz-Target", "TrentService.ListGrants")
+                .contentType(KMS_CONTENT_TYPE)
+                .body("{\"KeyId\":\"" + keyId + "\"}")
+                .when().post("/")
+                .then()
+                .statusCode(200)
+                .body("Grants.size()", equalTo(0))
+                .body("Truncated", equalTo(false));
+    }
+
+    @Test
+    void revokeGrantReturnsNotFoundForUnknownGrant() {
+        String keyId = given()
+                .header("X-Amz-Target", "TrentService.CreateKey")
+                .contentType(KMS_CONTENT_TYPE)
+                .body("{\"Description\":\"revoke-unknown-grant\"}")
+                .when().post("/")
+                .then().statusCode(200)
+                .extract().path("KeyMetadata.KeyId");
+
+        given()
+                .header("X-Amz-Target", "TrentService.RevokeGrant")
+                .contentType(KMS_CONTENT_TYPE)
+                .body("{\"KeyId\":\"" + keyId + "\",\"GrantId\":\"non-existent-grant-id\"}")
+                .when().post("/")
+                .then()
+                .statusCode(400)
+                .body("__type", equalTo("NotFoundException"));
+    }
+
+    @Test
+    void revokeGrantReturnsNotFoundForUnknownKey() {
+        given()
+                .header("X-Amz-Target", "TrentService.RevokeGrant")
+                .contentType(KMS_CONTENT_TYPE)
+                .body("{\"KeyId\":\"non-existent-key\",\"GrantId\":\"some-grant-id\"}")
+                .when().post("/")
+                .then()
+                .statusCode(404)
+                .body("__type", equalTo("NotFoundException"));
+    }
+
+    @Test
+    void revokeGrantReturnsValidationForMissingRequiredFields() {
+        given()
+                .header("X-Amz-Target", "TrentService.RevokeGrant")
+                .contentType(KMS_CONTENT_TYPE)
+                .body("{\"KeyId\":\"some-key-id\"}")
+                .when().post("/")
+                .then()
+                .statusCode(400)
+                .body("__type", equalTo("ValidationException"));
+    }
 }

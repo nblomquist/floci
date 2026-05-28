@@ -269,6 +269,69 @@ class KmsServiceTest {
         assertEquals("ValidationException", ex.getErrorCode());
     }
 
+    // ──────────────────────────── Phase 5: RevokeGrant ────────────────────────────
+
+    @Test
+    void revokeGrantRemovesGrant() {
+        KmsKey key = kmsService.createKey("revoke key", REGION);
+        KmsGrant grant = kmsService.createGrant(
+                key.getKeyId(),
+                "arn:aws:iam::000000000000:user/grantee",
+                List.of("Encrypt"),
+                REGION);
+
+        // Grant exists before revoke
+        Map<String, Object> before = kmsService.listGrants(key.getKeyId(), REGION, null, null, null, null);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> beforeGrants = (List<Map<String, Object>>) before.get("Grants");
+        assertEquals(1, beforeGrants.size());
+
+        // Revoke the grant
+        kmsService.revokeGrant(key.getKeyId(), grant.getGrantId(), REGION);
+
+        // Grant is gone after revoke
+        Map<String, Object> after = kmsService.listGrants(key.getKeyId(), REGION, null, null, null, null);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> afterGrants = (List<Map<String, Object>>) after.get("Grants");
+        assertTrue(afterGrants.isEmpty());
+    }
+
+    @Test
+    void revokeGrantUnknownGrantThrowsNotFound() {
+        KmsKey key = kmsService.createKey("revoke unknown grant key", REGION);
+
+        AwsException ex = assertThrows(AwsException.class, () ->
+                kmsService.revokeGrant(key.getKeyId(), "non-existent-grant-id", REGION));
+
+        assertEquals("NotFoundException", ex.getErrorCode());
+    }
+
+    @Test
+    void revokeGrantUnknownKeyThrowsNotFound() {
+        AwsException ex = assertThrows(AwsException.class, () ->
+                kmsService.revokeGrant("non-existent-key", "some-grant-id", REGION));
+
+        assertEquals("NotFoundException", ex.getErrorCode());
+    }
+
+    @Test
+    void revokeGrantMissingKeyIdThrowsValidation() {
+        AwsException ex = assertThrows(AwsException.class, () ->
+                kmsService.revokeGrant(null, "some-grant-id", REGION));
+
+        assertEquals("ValidationException", ex.getErrorCode());
+    }
+
+    @Test
+    void revokeGrantMissingGrantIdThrowsValidation() {
+        KmsKey key = kmsService.createKey("revoke missing grant key", REGION);
+
+        AwsException ex = assertThrows(AwsException.class, () ->
+                kmsService.revokeGrant(key.getKeyId(), null, REGION));
+
+        assertEquals("ValidationException", ex.getErrorCode());
+    }
+
     @Test
     void describeKeyNotFound() {
         AwsException ex = assertThrows(AwsException.class, () ->
