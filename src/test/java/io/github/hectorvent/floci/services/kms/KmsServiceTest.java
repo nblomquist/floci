@@ -5,6 +5,7 @@ import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.common.ReservedTags;
 import io.github.hectorvent.floci.core.storage.InMemoryStorage;
 import io.github.hectorvent.floci.services.kms.model.KmsAlias;
+import io.github.hectorvent.floci.services.kms.model.KmsGrant;
 import io.github.hectorvent.floci.services.kms.model.KmsKey;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.junit.jupiter.api.BeforeAll;
@@ -42,6 +43,7 @@ class KmsServiceTest {
     @BeforeEach
     void setUp() {
         kmsService = new KmsService(
+                new InMemoryStorage<>(),
                 new InMemoryStorage<>(),
                 new InMemoryStorage<>(),
                 new RegionResolver("us-east-1", "000000000000")
@@ -82,6 +84,67 @@ class KmsServiceTest {
     void listGrantsUnknownKeyThrowsNotFound() {
         AwsException ex = assertThrows(AwsException.class, () ->
                 kmsService.listGrants("non-existent-id", REGION));
+
+        assertEquals("NotFoundException", ex.getErrorCode());
+    }
+
+    @Test
+    void createGrantAndListGrantsRoundTrip() {
+        KmsKey key = kmsService.createKey("grant key", REGION);
+
+        KmsGrant grant = kmsService.createGrant(
+                key.getKeyId(),
+                "arn:aws:iam::000000000000:user/grantee",
+                List.of("Encrypt", "Decrypt"),
+                REGION);
+
+        assertNotNull(grant.getGrantId());
+        assertFalse(grant.getGrantId().isBlank());
+        assertNotNull(grant.getGrantToken());
+        assertFalse(grant.getGrantToken().isBlank());
+
+        List<Map<String, Object>> grants = kmsService.listGrants(key.getKeyId(), REGION);
+
+        assertEquals(1, grants.size());
+        Map<String, Object> listedGrant = grants.getFirst();
+        assertEquals(grant.getGrantId(), listedGrant.get("GrantId"));
+        assertEquals(key.getArn(), listedGrant.get("KeyId"));
+        assertEquals("arn:aws:iam::000000000000:user/grantee", listedGrant.get("GranteePrincipal"));
+        assertEquals(List.of("Encrypt", "Decrypt"), listedGrant.get("Operations"));
+    }
+
+    @Test
+    void createGrantMissingKeyIdThrowsValidation() {
+        AwsException ex = assertThrows(AwsException.class, () ->
+                kmsService.createGrant(null, "arn:aws:iam::000000000000:user/grantee", List.of("Encrypt"), REGION));
+
+        assertEquals("ValidationException", ex.getErrorCode());
+    }
+
+    @Test
+    void createGrantMissingGranteePrincipalThrowsValidation() {
+        KmsKey key = kmsService.createKey("grant key", REGION);
+
+        AwsException ex = assertThrows(AwsException.class, () ->
+                kmsService.createGrant(key.getKeyId(), "", List.of("Encrypt"), REGION));
+
+        assertEquals("ValidationException", ex.getErrorCode());
+    }
+
+    @Test
+    void createGrantMissingOperationsThrowsValidation() {
+        KmsKey key = kmsService.createKey("grant key", REGION);
+
+        AwsException ex = assertThrows(AwsException.class, () ->
+                kmsService.createGrant(key.getKeyId(), "arn:aws:iam::000000000000:user/grantee", List.of(), REGION));
+
+        assertEquals("ValidationException", ex.getErrorCode());
+    }
+
+    @Test
+    void createGrantUnknownKeyThrowsNotFound() {
+        AwsException ex = assertThrows(AwsException.class, () ->
+                kmsService.createGrant("non-existent-id", "arn:aws:iam::000000000000:user/grantee", List.of("Encrypt"), REGION));
 
         assertEquals("NotFoundException", ex.getErrorCode());
     }

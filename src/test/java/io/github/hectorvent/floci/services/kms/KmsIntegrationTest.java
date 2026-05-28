@@ -170,4 +170,85 @@ class KmsIntegrationTest {
                 .statusCode(404)
                 .body("__type", equalTo("NotFoundException"));
     }
+
+    @Test
+    void createGrantAndListGrantsRoundTripThroughJsonHandler() {
+        String keyId = given()
+                .header("X-Amz-Target", "TrentService.CreateKey")
+                .contentType(KMS_CONTENT_TYPE)
+                .body("{\"Description\":\"create-grant-round-trip\"}")
+                .when()
+                .post("/")
+                .then()
+                .statusCode(200)
+                .extract()
+                .path("KeyMetadata.KeyId");
+
+        String grantId = given()
+                .header("X-Amz-Target", "TrentService.CreateGrant")
+                .contentType(KMS_CONTENT_TYPE)
+                .body("""
+                        {
+                            "KeyId": "%s",
+                            "GranteePrincipal": "arn:aws:iam::000000000000:user/grantee",
+                            "Operations": ["Encrypt", "Decrypt"]
+                        }
+                        """.formatted(keyId))
+                .when()
+                .post("/")
+                .then()
+                .statusCode(200)
+                .body("GrantId", notNullValue())
+                .body("GrantToken", notNullValue())
+                .extract()
+                .path("GrantId");
+
+        given()
+                .header("X-Amz-Target", "TrentService.ListGrants")
+                .contentType(KMS_CONTENT_TYPE)
+                .body("{\"KeyId\":\"" + keyId + "\"}")
+                .when()
+                .post("/")
+                .then()
+                .statusCode(200)
+                .body("Grants.size()", equalTo(1))
+                .body("Grants[0].GrantId", equalTo(grantId))
+                .body("Grants[0].KeyId", startsWith("arn:aws:kms:"))
+                .body("Grants[0].GranteePrincipal", equalTo("arn:aws:iam::000000000000:user/grantee"))
+                .body("Grants[0].Operations[0]", equalTo("Encrypt"))
+                .body("Grants[0].Operations[1]", equalTo("Decrypt"))
+                .body("Truncated", equalTo(false));
+    }
+
+    @Test
+    void createGrantReturnsValidationForMissingRequiredFields() {
+        given()
+                .header("X-Amz-Target", "TrentService.CreateGrant")
+                .contentType(KMS_CONTENT_TYPE)
+                .body("{\"GranteePrincipal\":\"arn:aws:iam::000000000000:user/grantee\",\"Operations\":[\"Encrypt\"]}")
+                .when()
+                .post("/")
+                .then()
+                .statusCode(400)
+                .body("__type", equalTo("ValidationException"));
+    }
+
+    @Test
+    void createGrantReturnsNotFoundForUnknownKey() {
+        given()
+                .header("X-Amz-Target", "TrentService.CreateGrant")
+                .contentType(KMS_CONTENT_TYPE)
+                .body("""
+                        {
+                            "KeyId": "non-existent-id",
+                            "GranteePrincipal": "arn:aws:iam::000000000000:user/grantee",
+                            "Operations": ["Encrypt"]
+                        }
+                        """)
+                .when()
+                .post("/")
+                .then()
+                .statusCode(404)
+                .body("__type", equalTo("NotFoundException"));
+    }
 }

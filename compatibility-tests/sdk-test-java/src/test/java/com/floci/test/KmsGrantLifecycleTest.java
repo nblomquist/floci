@@ -32,6 +32,42 @@ class KmsGrantLifecycleTest {
     }
 
     @Test
+    void createListGrantRoundTrip() {
+        final String[] keyId = new String[1];
+        try {
+            CreateKeyResponse keyResponse = kms.createKey(b -> b.description("grant-create-list-key"));
+            keyId[0] = keyResponse.keyMetadata().keyId();
+
+            CreateGrantResponse grantResponse = kms.createGrant(b -> b
+                    .keyId(keyId[0])
+                    .granteePrincipal(GRANTEE_PRINCIPAL)
+                    .operations(GrantOperation.DECRYPT));
+
+            String grantId = grantResponse.grantId();
+            String grantToken = grantResponse.grantToken();
+
+            assertThat(grantId).isNotBlank();
+            assertThat(grantToken).isNotBlank();
+
+            ListGrantsResponse grantsResponse = kms.listGrants(b -> b.keyId(keyId[0]));
+            assertThat(grantsResponse.truncated()).isFalse();
+            assertThat(grantsResponse.grants())
+                    .anySatisfy(grant -> {
+                        assertThat(grant.grantId()).isEqualTo(grantId);
+                        assertThat(grant.keyId()).contains(keyId[0]);
+                        assertThat(grant.granteePrincipal()).isEqualTo(GRANTEE_PRINCIPAL);
+                        assertThat(grant.operations()).contains(GrantOperation.DECRYPT);
+                    });
+        } finally {
+            if (keyId[0] != null) {
+                kms.scheduleKeyDeletion(b -> b
+                        .keyId(keyId[0])
+                        .pendingWindowInDays(7));
+            }
+        }
+    }
+
+    @Test
     void createListRevokeGrantRoundTrip() {
         final String[] keyId = new String[1];
         try {
