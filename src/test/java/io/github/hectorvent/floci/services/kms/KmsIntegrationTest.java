@@ -251,4 +251,104 @@ class KmsIntegrationTest {
                 .statusCode(404)
                 .body("__type", equalTo("NotFoundException"));
     }
+
+    // ──────────────────────────── Phase 4: Pagination, Filters, ListRetirableGrants ────────────────────────────
+
+    @Test
+    void listGrantsSupportsPaginationThroughJsonHandler() {
+        String keyId = given()
+                .header("X-Amz-Target", "TrentService.CreateKey")
+                .contentType(KMS_CONTENT_TYPE)
+                .body("{\"Description\":\"pagination-key\"}")
+                .when().post("/")
+                .then().statusCode(200)
+                .extract().path("KeyMetadata.KeyId");
+
+        for (int i = 0; i < 3; i++) {
+            given()
+                    .header("X-Amz-Target", "TrentService.CreateGrant")
+                    .contentType(KMS_CONTENT_TYPE)
+                    .body("{\"KeyId\":\"" + keyId + "\",\"GranteePrincipal\":\"arn:aws:iam::000000000000:user/grantee\",\"Operations\":[\"Encrypt\"]}")
+                    .when().post("/")
+                    .then().statusCode(200);
+        }
+
+        String nextMarker = given()
+                .header("X-Amz-Target", "TrentService.ListGrants")
+                .contentType(KMS_CONTENT_TYPE)
+                .body("{\"KeyId\":\"" + keyId + "\",\"Limit\":2}")
+                .when().post("/")
+                .then()
+                .statusCode(200)
+                .body("Grants.size()", equalTo(2))
+                .body("Truncated", equalTo(true))
+                .body("NextMarker", notNullValue())
+                .extract().path("NextMarker");
+
+        given()
+                .header("X-Amz-Target", "TrentService.ListGrants")
+                .contentType(KMS_CONTENT_TYPE)
+                .body("{\"KeyId\":\"" + keyId + "\",\"Marker\":\"" + nextMarker + "\",\"Limit\":2}")
+                .when().post("/")
+                .then()
+                .statusCode(200)
+                .body("Grants.size()", equalTo(1))
+                .body("Truncated", equalTo(false));
+    }
+
+    @Test
+    void listGrantsReturnsInvalidMarkerForBadMarker() {
+        String keyId = given()
+                .header("X-Amz-Target", "TrentService.CreateKey")
+                .contentType(KMS_CONTENT_TYPE)
+                .body("{\"Description\":\"bad-marker-key\"}")
+                .when().post("/")
+                .then().statusCode(200)
+                .extract().path("KeyMetadata.KeyId");
+
+        given()
+                .header("X-Amz-Target", "TrentService.ListGrants")
+                .contentType(KMS_CONTENT_TYPE)
+                .body("{\"KeyId\":\"" + keyId + "\",\"Marker\":\"bad-marker\"}")
+                .when().post("/")
+                .then()
+                .statusCode(400)
+                .body("__type", equalTo("InvalidMarkerException"));
+    }
+
+    @Test
+    void listRetirableGrantsReturnsMatchingGrantsThroughJsonHandler() {
+        String keyId = given()
+                .header("X-Amz-Target", "TrentService.CreateKey")
+                .contentType(KMS_CONTENT_TYPE)
+                .body("{\"Description\":\"retirable-key\"}")
+                .when().post("/")
+                .then().statusCode(200)
+                .extract().path("KeyMetadata.KeyId");
+
+        given()
+                .header("X-Amz-Target", "TrentService.CreateGrant")
+                .contentType(KMS_CONTENT_TYPE)
+                .body("""
+                        {
+                            "KeyId": "%s",
+                            "GranteePrincipal": "arn:aws:iam::000000000000:user/grantee",
+                            "RetiringPrincipal": "arn:aws:iam::000000000000:role/retirer",
+                            "Operations": ["Encrypt"]
+                        }
+                        """.formatted(keyId))
+                .when().post("/")
+                .then().statusCode(200);
+
+        given()
+                .header("X-Amz-Target", "TrentService.ListRetirableGrants")
+                .contentType(KMS_CONTENT_TYPE)
+                .body("{\"RetiringPrincipal\":\"arn:aws:iam::000000000000:role/retirer\"}")
+                .when().post("/")
+                .then()
+                .statusCode(200)
+                .body("Grants.size()", equalTo(1))
+                .body("Grants[0].RetiringPrincipal", equalTo("arn:aws:iam::000000000000:role/retirer"))
+                .body("Truncated", equalTo(false));
+    }
 }
