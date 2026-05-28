@@ -132,4 +132,42 @@ class KmsIntegrationTest {
                 .statusCode(200)
                 .body("KeyId", equalTo(keyId));
     }
+
+    @Test
+    void listGrantsReturnsEmptyGrantListThroughJsonHandler() {
+        String keyId = given()
+                .header("X-Amz-Target", "TrentService.CreateKey")
+                .contentType(KMS_CONTENT_TYPE)
+                .body("{\"Description\":\"list-grants-empty\"}")
+                .when()
+                .post("/")
+                .then()
+                .statusCode(200)
+                .extract()
+                .path("KeyMetadata.KeyId");
+
+        given()
+                .header("X-Amz-Target", "TrentService.ListGrants")
+                .contentType(KMS_CONTENT_TYPE)
+                .body("{\"KeyId\":\"" + keyId + "\"}")
+                .when()
+                .post("/")
+                .then()
+                .statusCode(200)
+                .body("Grants.size()", equalTo(0))
+                .body("Truncated", equalTo(false));
+    }
+
+    @Test
+    void listGrantsReturnsNotFoundForUnknownKey() {
+        given()
+                .header("X-Amz-Target", "TrentService.ListGrants")
+                .contentType(KMS_CONTENT_TYPE)
+                .body("{\"KeyId\":\"non-existent-id\"}")
+                .when()
+                .post("/")
+                .then()
+                .statusCode(404)
+                .body("__type", equalTo("NotFoundException"));
+    }
 }

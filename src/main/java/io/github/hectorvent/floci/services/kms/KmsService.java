@@ -234,6 +234,11 @@ public class KmsService {
         return keyStore.scan(k -> k.startsWith(prefix));
     }
 
+    public List<Map<String, Object>> listGrants(String keyId, String region) {
+        resolveKey(keyId, region);
+        return List.of();
+    }
+
     public void scheduleKeyDeletion(String keyId, int pendingWindowInDays, String region) {
         KmsKey key = resolveKey(keyId, region);
         key.setKeyState("PendingDeletion");

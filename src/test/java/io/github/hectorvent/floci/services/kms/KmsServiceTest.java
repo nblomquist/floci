@@ -70,6 +70,23 @@ class KmsServiceTest {
     }
 
     @Test
+    void listGrantsReturnsEmptyListForExistingKey() {
+        KmsKey key = kmsService.createKey("grant key", REGION);
+
+        List<Map<String, Object>> grants = kmsService.listGrants(key.getKeyId(), REGION);
+
+        assertTrue(grants.isEmpty());
+    }
+
+    @Test
+    void listGrantsUnknownKeyThrowsNotFound() {
+        AwsException ex = assertThrows(AwsException.class, () ->
+                kmsService.listGrants("non-existent-id", REGION));
+
+        assertEquals("NotFoundException", ex.getErrorCode());
+    }
+
+    @Test
     void describeKeyNotFound() {
         AwsException ex = assertThrows(AwsException.class, () ->
                 kmsService.describeKey("non-existent-id", REGION));

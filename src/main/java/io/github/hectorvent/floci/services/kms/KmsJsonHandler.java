@@ -38,6 +38,7 @@ public class KmsJsonHandler {
             case "GetPublicKey" -> handleGetPublicKey(request, region);
             case "DescribeKey" -> handleDescribeKey(request, region);
             case "ListKeys" -> handleListKeys(request, region);
+            case "ListGrants" -> handleListGrants(request, region);
             case "Encrypt" -> handleEncrypt(request, region);
             case "Decrypt" -> handleDecrypt(request, region);
             case "ReEncrypt" -> handleReEncrypt(request, region);
@@ -135,6 +136,14 @@ public class KmsJsonHandler {
             entry.put("KeyId", k.getKeyId());
             entry.put("KeyArn", k.getArn());
         }
+        response.put("Truncated", false);
+        return Response.ok(response).build();
+    }
+
+    private Response handleListGrants(JsonNode request, String region) {
+        service.listGrants(request.path("KeyId").asText(), region);
+        ObjectNode response = objectMapper.createObjectNode();
+        response.putArray("Grants");
         response.put("Truncated", false);
         return Response.ok(response).build();
     }
