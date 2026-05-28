@@ -332,6 +332,107 @@ class KmsServiceTest {
         assertEquals("ValidationException", ex.getErrorCode());
     }
 
+    // ──────────────────────────── Phase 6: RetireGrant ────────────────────────────
+
+    @Test
+    void retireGrantByTokenRemovesGrant() {
+        KmsKey key = kmsService.createKey("retire token key", REGION);
+        KmsGrant grant = kmsService.createGrant(
+                key.getKeyId(),
+                "arn:aws:iam::000000000000:user/grantee",
+                List.of("Encrypt"),
+                REGION);
+
+        // Grant exists before retire
+        Map<String, Object> before = kmsService.listGrants(key.getKeyId(), REGION, null, null, null, null);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> beforeGrants = (List<Map<String, Object>>) before.get("Grants");
+        assertEquals(1, beforeGrants.size());
+
+        // Retire by grant token
+        kmsService.retireGrant(grant.getGrantToken(), null, null, REGION);
+
+        // Grant is gone after retire
+        Map<String, Object> after = kmsService.listGrants(key.getKeyId(), REGION, null, null, null, null);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> afterGrants = (List<Map<String, Object>>) after.get("Grants");
+        assertTrue(afterGrants.isEmpty());
+    }
+
+    @Test
+    void retireGrantByTokenWithMatchingGrantIdSucceeds() {
+        KmsKey key = kmsService.createKey("retire token+grant key", REGION);
+        KmsGrant grant = kmsService.createGrant(
+                key.getKeyId(),
+                "arn:aws:iam::000000000000:user/grantee",
+                List.of("Encrypt"),
+                REGION);
+
+        kmsService.retireGrant(grant.getGrantToken(), null, grant.getGrantId(), REGION);
+
+        Map<String, Object> after = kmsService.listGrants(key.getKeyId(), REGION, null, null, null, null);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> afterGrants = (List<Map<String, Object>>) after.get("Grants");
+        assertTrue(afterGrants.isEmpty());
+    }
+
+    @Test
+    void retireGrantByTokenWithMismatchedGrantIdThrowsNotFound() {
+        KmsKey key = kmsService.createKey("retire mismatch key", REGION);
+        KmsGrant grant = kmsService.createGrant(
+                key.getKeyId(),
+                "arn:aws:iam::000000000000:user/grantee",
+                List.of("Encrypt"),
+                REGION);
+
+        AwsException ex = assertThrows(AwsException.class, () ->
+                kmsService.retireGrant(grant.getGrantToken(), null, "wrong-grant-id", REGION));
+
+        assertEquals("NotFoundException", ex.getErrorCode());
+    }
+
+    @Test
+    void retireGrantByKeyAndGrantIdRemovesGrant() {
+        KmsKey key = kmsService.createKey("retire admin key", REGION);
+        KmsGrant grant = kmsService.createGrant(
+                key.getKeyId(),
+                "arn:aws:iam::000000000000:user/grantee",
+                List.of("Encrypt"),
+                REGION);
+
+        // Administrative retire by KeyId + GrantId
+        kmsService.retireGrant(null, key.getKeyId(), grant.getGrantId(), REGION);
+
+        Map<String, Object> after = kmsService.listGrants(key.getKeyId(), REGION, null, null, null, null);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> afterGrants = (List<Map<String, Object>>) after.get("Grants");
+        assertTrue(afterGrants.isEmpty());
+    }
+
+    @Test
+    void retireGrantUnknownTokenThrowsNotFound() {
+        AwsException ex = assertThrows(AwsException.class, () ->
+                kmsService.retireGrant("nonexistent-token-value", null, null, REGION));
+
+        assertEquals("NotFoundException", ex.getErrorCode());
+    }
+
+    @Test
+    void retireGrantUnknownKeyThrowsNotFound() {
+        AwsException ex = assertThrows(AwsException.class, () ->
+                kmsService.retireGrant(null, "non-existent-key", "some-grant-id", REGION));
+
+        assertEquals("NotFoundException", ex.getErrorCode());
+    }
+
+    @Test
+    void retireGrantMissingAllIdentifiersThrowsValidation() {
+        AwsException ex = assertThrows(AwsException.class, () ->
+                kmsService.retireGrant(null, null, null, REGION));
+
+        assertEquals("ValidationException", ex.getErrorCode());
+    }
+
     @Test
     void describeKeyNotFound() {
         AwsException ex = assertThrows(AwsException.class, () ->

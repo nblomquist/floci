@@ -455,4 +455,144 @@ class KmsIntegrationTest {
                 .statusCode(400)
                 .body("__type", equalTo("ValidationException"));
     }
+
+    // ──────────────────────────── Phase 6: RetireGrant ────────────────────────────
+
+    @Test
+    void createRetireByTokenAndListGrantsRoundTripThroughJsonHandler() {
+        String keyId = given()
+                .header("X-Amz-Target", "TrentService.CreateKey")
+                .contentType(KMS_CONTENT_TYPE)
+                .body("{\"Description\":\"retire-by-token-round-trip\"}")
+                .when().post("/")
+                .then().statusCode(200)
+                .extract().path("KeyMetadata.KeyId");
+
+        String grantToken = given()
+                .header("X-Amz-Target", "TrentService.CreateGrant")
+                .contentType(KMS_CONTENT_TYPE)
+                .body("""
+                        {
+                            "KeyId": "%s",
+                            "GranteePrincipal": "arn:aws:iam::000000000000:user/grantee",
+                            "Operations": ["Encrypt", "Decrypt"]
+                        }
+                        """.formatted(keyId))
+                .when().post("/")
+                .then().statusCode(200)
+                .body("GrantId", notNullValue())
+                .body("GrantToken", notNullValue())
+                .extract().path("GrantToken");
+
+        // Grant is listed before retire
+        given()
+                .header("X-Amz-Target", "TrentService.ListGrants")
+                .contentType(KMS_CONTENT_TYPE)
+                .body("{\"KeyId\":\"" + keyId + "\"}")
+                .when().post("/")
+                .then()
+                .statusCode(200)
+                .body("Grants.size()", equalTo(1));
+
+        // Retire by grant token
+        given()
+                .header("X-Amz-Target", "TrentService.RetireGrant")
+                .contentType(KMS_CONTENT_TYPE)
+                .body("{\"GrantToken\":\"" + grantToken + "\"}")
+                .when().post("/")
+                .then()
+                .statusCode(200);
+
+        // Grant is gone after retire
+        given()
+                .header("X-Amz-Target", "TrentService.ListGrants")
+                .contentType(KMS_CONTENT_TYPE)
+                .body("{\"KeyId\":\"" + keyId + "\"}")
+                .when().post("/")
+                .then()
+                .statusCode(200)
+                .body("Grants.size()", equalTo(0))
+                .body("Truncated", equalTo(false));
+    }
+
+    @Test
+    void createRetireByKeyAndGrantIdAndListGrantsRoundTripThroughJsonHandler() {
+        String keyId = given()
+                .header("X-Amz-Target", "TrentService.CreateKey")
+                .contentType(KMS_CONTENT_TYPE)
+                .body("{\"Description\":\"retire-admin-round-trip\"}")
+                .when().post("/")
+                .then().statusCode(200)
+                .extract().path("KeyMetadata.KeyId");
+
+        String grantId = given()
+                .header("X-Amz-Target", "TrentService.CreateGrant")
+                .contentType(KMS_CONTENT_TYPE)
+                .body("""
+                        {
+                            "KeyId": "%s",
+                            "GranteePrincipal": "arn:aws:iam::000000000000:user/grantee",
+                            "Operations": ["Encrypt", "Decrypt"]
+                        }
+                        """.formatted(keyId))
+                .when().post("/")
+                .then().statusCode(200)
+                .body("GrantId", notNullValue())
+                .body("GrantToken", notNullValue())
+                .extract().path("GrantId");
+
+        // Grant is listed before retire
+        given()
+                .header("X-Amz-Target", "TrentService.ListGrants")
+                .contentType(KMS_CONTENT_TYPE)
+                .body("{\"KeyId\":\"" + keyId + "\"}")
+                .when().post("/")
+                .then()
+                .statusCode(200)
+                .body("Grants.size()", equalTo(1));
+
+        // Administrative retire by KeyId + GrantId
+        given()
+                .header("X-Amz-Target", "TrentService.RetireGrant")
+                .contentType(KMS_CONTENT_TYPE)
+                .body("{\"KeyId\":\"" + keyId + "\",\"GrantId\":\"" + grantId + "\"}")
+                .when().post("/")
+                .then()
+                .statusCode(200);
+
+        // Grant is gone after retire
+        given()
+                .header("X-Amz-Target", "TrentService.ListGrants")
+                .contentType(KMS_CONTENT_TYPE)
+                .body("{\"KeyId\":\"" + keyId + "\"}")
+                .when().post("/")
+                .then()
+                .statusCode(200)
+                .body("Grants.size()", equalTo(0))
+                .body("Truncated", equalTo(false));
+    }
+
+    @Test
+    void retireGrantReturnsNotFoundForInvalidToken() {
+        given()
+                .header("X-Amz-Target", "TrentService.RetireGrant")
+                .contentType(KMS_CONTENT_TYPE)
+                .body("{\"GrantToken\":\"invalid-token-value\"}")
+                .when().post("/")
+                .then()
+                .statusCode(400)
+                .body("__type", equalTo("NotFoundException"));
+    }
+
+    @Test
+    void retireGrantReturnsValidationForMissingAllIdentifiers() {
+        given()
+                .header("X-Amz-Target", "TrentService.RetireGrant")
+                .contentType(KMS_CONTENT_TYPE)
+                .body("{}")
+                .when().post("/")
+                .then()
+                .statusCode(400)
+                .body("__type", equalTo("ValidationException"));
+    }
 }

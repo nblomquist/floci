@@ -43,6 +43,7 @@ public class KmsJsonHandler {
             case "ListGrants" -> handleListGrants(request, region);
             case "ListRetirableGrants" -> handleListRetirableGrants(request, region);
             case "RevokeGrant" -> handleRevokeGrant(request, region);
+            case "RetireGrant" -> handleRetireGrant(request, region);
             case "Encrypt" -> handleEncrypt(request, region);
             case "Decrypt" -> handleDecrypt(request, region);
             case "ReEncrypt" -> handleReEncrypt(request, region);
@@ -227,6 +228,18 @@ public class KmsJsonHandler {
         String grantId = request.path("GrantId").asText(null);
 
         service.revokeGrant(keyId, grantId, region);
+        return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
+    private Response handleRetireGrant(JsonNode request, String region) {
+        String grantToken = request.path("GrantToken").isMissingNode()
+                ? null : request.path("GrantToken").asText(null);
+        String keyId = request.path("KeyId").isMissingNode()
+                ? null : request.path("KeyId").asText(null);
+        String grantId = request.path("GrantId").isMissingNode()
+                ? null : request.path("GrantId").asText(null);
+
+        service.retireGrant(grantToken, keyId, grantId, region);
         return Response.ok(objectMapper.createObjectNode()).build();
     }
 

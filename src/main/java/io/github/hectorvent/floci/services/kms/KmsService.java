@@ -337,6 +337,53 @@ public class KmsService {
         LOG.infov("Revoked KMS grant: {0} for key {1} in {2}", grantId, keyId, region);
     }
 
+    public void retireGrant(String grantToken, String keyId, String grantId, String region) {
+        boolean hasToken = grantToken != null && !grantToken.isBlank();
+        boolean hasKeyAndGrant = keyId != null && !keyId.isBlank() && grantId != null && !grantId.isBlank();
+
+        if (!hasToken && !hasKeyAndGrant) {
+            throw new AwsException("ValidationException",
+                    "Either GrantToken or both KeyId and GrantId must be provided", 400);
+        }
+
+        // Token-based retirement: scan all grants in the region for matching token
+        if (hasToken) {
+            String prefix = region + "::";
+            KmsGrant found = grantStore.scan(k -> k.startsWith(prefix)).stream()
+                    .filter(g -> grantToken.equals(g.getGrantToken()))
+                    .findFirst()
+                    .orElseThrow(() -> new AwsException("NotFoundException",
+                            "Grant not found for the given grant token", 400));
+
+            // Cross-verify GrantId if provided
+            if (grantId != null && !grantId.isBlank() && !grantId.equals(found.getGrantId())) {
+                throw new AwsException("NotFoundException", "Grant not found", 400);
+            }
+
+            // Cross-verify KeyId if provided
+            if (keyId != null && !keyId.isBlank()) {
+                KmsKey key = resolveKey(keyId, region);
+                if (!key.getKeyId().equals(found.getKeyId())) {
+                    throw new AwsException("NotFoundException",
+                            "Grant not found for the given key", 400);
+                }
+            }
+
+            grantStore.delete(region + "::" + found.getGrantId());
+            LOG.infov("Retired KMS grant: {0} by token in {1}", found.getGrantId(), region);
+            return;
+        }
+
+        // KeyId + GrantId retirement (administrative, distinct from RevokeGrant surface)
+        resolveKey(keyId, region);
+        String storageKey = region + "::" + grantId;
+        if (grantStore.get(storageKey).isEmpty()) {
+            throw new AwsException("NotFoundException", "Grant not found: " + grantId, 400);
+        }
+        grantStore.delete(storageKey);
+        LOG.infov("Retired KMS grant: {0} for key {1} in {2}", grantId, keyId, region);
+    }
+
     private Map<String, Object> paginateGrants(List<KmsGrant> sortedGrants, String marker, Integer limit) {
         int effectiveLimit = limit != null ? Math.clamp(limit, 1, MAX_GRANT_LIMIT) : DEFAULT_GRANT_LIMIT;
 
