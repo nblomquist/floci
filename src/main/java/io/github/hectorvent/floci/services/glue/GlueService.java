@@ -17,6 +17,7 @@ import io.github.hectorvent.floci.services.glue.schemaregistry.GlueSchemaRegistr
 import io.github.hectorvent.floci.services.glue.schemaregistry.SchemaToColumnsConverter;
 import io.github.hectorvent.floci.services.glue.schemaregistry.model.SchemaId;
 import io.github.hectorvent.floci.services.glue.schemaregistry.model.SchemaVersion;
+import io.github.hectorvent.floci.services.resourcegroupstagging.ResourceGroupsTaggingService;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
@@ -45,17 +46,20 @@ public class GlueService {
     private final StorageBackend<String, UserDefinedFunction> functionStore;
     private final GlueSchemaRegistryService schemaRegistryService;
     private final RegionResolver regionResolver;
+    private final ResourceGroupsTaggingService resourceGroupsTaggingService;
 
     @Inject
     public GlueService(StorageFactory storageFactory,
                        GlueSchemaRegistryService schemaRegistryService,
-                       RegionResolver regionResolver) {
+                       RegionResolver regionResolver,
+                       ResourceGroupsTaggingService resourceGroupsTaggingService) {
         this.databaseStore = storageFactory.create("glue", "databases.json", new TypeReference<>() {});
         this.tableStore = storageFactory.create("glue", "tables.json", new TypeReference<>() {});
         this.partitionStore = storageFactory.create("glue", "partitions.json", new TypeReference<>() {});
         this.functionStore = storageFactory.create("glue", "functions.json", new TypeReference<>() {});
         this.schemaRegistryService = schemaRegistryService;
         this.regionResolver = regionResolver;
+        this.resourceGroupsTaggingService = resourceGroupsTaggingService;
     }
 
     GlueService(StorageBackend<String, Database> databaseStore,
@@ -63,22 +67,31 @@ public class GlueService {
                 StorageBackend<String, Partition> partitionStore,
                 StorageBackend<String, UserDefinedFunction> functionStore,
                 GlueSchemaRegistryService schemaRegistryService,
-                RegionResolver regionResolver) {
+                RegionResolver regionResolver,
+                ResourceGroupsTaggingService resourceGroupsTaggingService) {
         this.databaseStore = databaseStore;
         this.tableStore = tableStore;
         this.partitionStore = partitionStore;
         this.functionStore = functionStore;
         this.schemaRegistryService = schemaRegistryService;
         this.regionResolver = regionResolver;
+        this.resourceGroupsTaggingService = resourceGroupsTaggingService;
     }
 
     public void createDatabase(Database database) {
+        createDatabase(database, null, regionResolver.getDefaultRegion());
+    }
+
+    public void createDatabase(Database database, Map<String, String> tags, String region) {
         String databaseName = normalizeName(database.getName());
         if (databaseStore.get(databaseName).isPresent()) {
             throw new AwsException("AlreadyExistsException", "Database already exists: " + database.getName(), 400);
         }
         database.setName(databaseName);
         databaseStore.put(databaseName, database);
+        if (tags != null && !tags.isEmpty()) {
+            resourceGroupsTaggingService.tagResources(List.of(databaseArn(region, databaseName)), tags, region);
+        }
         LOG.infov("Created Glue Database: {0}", database.getName());
     }
 
@@ -92,6 +105,10 @@ public class GlueService {
     }
 
     public void deleteDatabase(String name) {
+        deleteDatabase(name, regionResolver.getDefaultRegion());
+    }
+
+    public void deleteDatabase(String name, String region) {
         String databaseName = getDatabase(name).getName();
         List<String> tableNames = tableStore.scan(k -> true).stream()
                 .filter(table -> databaseName.equals(table.getDatabaseName()))
@@ -99,6 +116,7 @@ public class GlueService {
                 .toList();
         tableNames.forEach(tableName -> deleteTable(name, tableName));
         databaseStore.delete(databaseName);
+        resourceGroupsTaggingService.deleteResources(List.of(databaseArn(region, databaseName)), region);
         LOG.infov("Deleted Glue Database: {0}", name);
     }
 
@@ -322,6 +340,10 @@ public class GlueService {
 
     private static String normalizeName(String name) {
         return name.toLowerCase(Locale.ROOT);
+    }
+
+    private String databaseArn(String region, String databaseName) {
+        return regionResolver.buildArn("glue", region, "database/" + databaseName);
     }
 
     private static Pattern compileFunctionPattern(String pattern) {

@@ -47,7 +47,11 @@ public class GlueJsonHandler {
         return switch (action) {
             case "CreateDatabase" -> {
                 Database db = mapper.treeToValue(request.get("DatabaseInput"), Database.class);
-                glueService.createDatabase(db);
+                @SuppressWarnings("unchecked")
+                Map<String, String> tags = request.has("Tags")
+                        ? mapper.convertValue(request.get("Tags"), Map.class)
+                        : null;
+                glueService.createDatabase(db, tags, region);
                 yield Response.ok().build();
             }
             case "GetDatabase" -> {
@@ -60,7 +64,7 @@ public class GlueJsonHandler {
             }
             case "DeleteDatabase" -> {
                 String name = request.get("Name").asText();
-                glueService.deleteDatabase(name);
+                glueService.deleteDatabase(name, region);
                 yield Response.ok().build();
             }
             case "CreateTable" -> {
