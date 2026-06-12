@@ -2,6 +2,7 @@ package tests
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/iot"
 	iottypes "github.com/aws/aws-sdk-go-v2/service/iot/types"
+	"github.com/aws/aws-sdk-go-v2/service/iotdataplane"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -119,6 +121,108 @@ func TestIoT(t *testing.T) {
 			ResourceArn: aws.String("arn:aws:iot:us-east-1:000000000000:thing/missing-tagged-thing"),
 		})
 		require.Error(t, err)
+	})
+
+	t.Run("CertificatesPoliciesAndAttachments", func(t *testing.T) {
+		createdCert, err := svc.CreateKeysAndCertificate(ctx, &iot.CreateKeysAndCertificateInput{SetAsActive: true})
+		require.NoError(t, err)
+		certArn := aws.ToString(createdCert.CertificateArn)
+		certID := aws.ToString(createdCert.CertificateId)
+		assert.Contains(t, aws.ToString(createdCert.CertificatePem), "BEGIN CERTIFICATE")
+		require.NotNil(t, createdCert.KeyPair)
+
+		described, err := svc.DescribeCertificate(ctx, &iot.DescribeCertificateInput{CertificateId: aws.String(certID)})
+		require.NoError(t, err)
+		assert.Equal(t, iottypes.CertificateStatusActive, described.CertificateDescription.Status)
+
+		listedCerts, err := svc.ListCertificates(ctx, &iot.ListCertificatesInput{})
+		require.NoError(t, err)
+		assert.NotEmpty(t, listedCerts.Certificates)
+
+		_, err = svc.UpdateCertificate(ctx, &iot.UpdateCertificateInput{CertificateId: aws.String(certID), NewStatus: iottypes.CertificateStatusInactive})
+		require.NoError(t, err)
+
+		described, err = svc.DescribeCertificate(ctx, &iot.DescribeCertificateInput{CertificateId: aws.String(certID)})
+		require.NoError(t, err)
+		assert.Equal(t, iottypes.CertificateStatusInactive, described.CertificateDescription.Status)
+
+		policyName := "go-iot-policy"
+		policyDocument := `{"Version":"2012-10-17","Statement":[]}`
+		createdPolicy, err := svc.CreatePolicy(ctx, &iot.CreatePolicyInput{PolicyName: aws.String(policyName), PolicyDocument: aws.String(policyDocument)})
+		require.NoError(t, err)
+		assert.Equal(t, policyName, aws.ToString(createdPolicy.PolicyName))
+
+		gotPolicy, err := svc.GetPolicy(ctx, &iot.GetPolicyInput{PolicyName: aws.String(policyName)})
+		require.NoError(t, err)
+		assert.Contains(t, aws.ToString(gotPolicy.PolicyDocument), "2012-10-17")
+
+		listedPolicies, err := svc.ListPolicies(ctx, &iot.ListPoliciesInput{})
+		require.NoError(t, err)
+		assert.NotEmpty(t, listedPolicies.Policies)
+
+		_, err = svc.AttachPolicy(ctx, &iot.AttachPolicyInput{PolicyName: aws.String(policyName), Target: aws.String(certArn)})
+		require.NoError(t, err)
+		_, err = svc.DetachPolicy(ctx, &iot.DetachPolicyInput{PolicyName: aws.String(policyName), Target: aws.String(certArn)})
+		require.NoError(t, err)
+
+		thingName := "go-iot-principal-thing"
+		_, _ = svc.DeleteThing(ctx, &iot.DeleteThingInput{ThingName: aws.String(thingName)})
+		_, err = svc.CreateThing(ctx, &iot.CreateThingInput{ThingName: aws.String(thingName)})
+		require.NoError(t, err)
+		_, err = svc.AttachThingPrincipal(ctx, &iot.AttachThingPrincipalInput{ThingName: aws.String(thingName), Principal: aws.String(certArn)})
+		require.NoError(t, err)
+		principals, err := svc.ListThingPrincipals(ctx, &iot.ListThingPrincipalsInput{ThingName: aws.String(thingName)})
+		require.NoError(t, err)
+		assert.Contains(t, principals.Principals, certArn)
+		_, err = svc.DetachThingPrincipal(ctx, &iot.DetachThingPrincipalInput{ThingName: aws.String(thingName), Principal: aws.String(certArn)})
+		require.NoError(t, err)
+	})
+
+	t.Run("IoTDataShadowsAndPublish", func(t *testing.T) {
+		dataSvc := testutil.IoTDataClient()
+		thingName := "go-iot-shadow-thing"
+
+		_, err := dataSvc.GetThingShadow(ctx, &iotdataplane.GetThingShadowInput{ThingName: aws.String(thingName)})
+		require.Error(t, err)
+
+		updated, err := dataSvc.UpdateThingShadow(ctx, &iotdataplane.UpdateThingShadowInput{
+			ThingName: aws.String(thingName),
+			Payload:   []byte(`{"state":{"desired":{"color":"blue"}}}`),
+		})
+		require.NoError(t, err)
+		var shadow map[string]any
+		require.NoError(t, json.Unmarshal(updated.Payload, &shadow))
+		assert.Equal(t, float64(1), shadow["version"])
+
+		_, err = dataSvc.UpdateThingShadow(ctx, &iotdataplane.UpdateThingShadowInput{
+			ThingName: aws.String(thingName),
+			Payload:   []byte(`{"state":{"reported":{"color":"green"}}}`),
+		})
+		require.NoError(t, err)
+
+		got, err := dataSvc.GetThingShadow(ctx, &iotdataplane.GetThingShadowInput{ThingName: aws.String(thingName)})
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(got.Payload, &shadow))
+		state := shadow["state"].(map[string]any)
+		assert.Equal(t, "blue", state["desired"].(map[string]any)["color"])
+		assert.Equal(t, "green", state["reported"].(map[string]any)["color"])
+
+		_, err = dataSvc.UpdateThingShadow(ctx, &iotdataplane.UpdateThingShadowInput{
+			ThingName:  aws.String(thingName),
+			ShadowName: aws.String("settings"),
+			Payload:    []byte(`{"state":{"desired":{"mode":"auto"}}}`),
+		})
+		require.NoError(t, err)
+		named, err := dataSvc.ListNamedShadowsForThing(ctx, &iotdataplane.ListNamedShadowsForThingInput{ThingName: aws.String(thingName)})
+		require.NoError(t, err)
+		assert.Contains(t, named.Results, "settings")
+
+		_, err = dataSvc.Publish(ctx, &iotdataplane.PublishInput{Topic: aws.String("devices/" + thingName + "/events"), Payload: []byte("payload")})
+		require.NoError(t, err)
+		_, err = dataSvc.DeleteThingShadow(ctx, &iotdataplane.DeleteThingShadowInput{ThingName: aws.String(thingName), ShadowName: aws.String("settings")})
+		require.NoError(t, err)
+		_, err = dataSvc.DeleteThingShadow(ctx, &iotdataplane.DeleteThingShadowInput{ThingName: aws.String(thingName)})
+		require.NoError(t, err)
 	})
 }
 

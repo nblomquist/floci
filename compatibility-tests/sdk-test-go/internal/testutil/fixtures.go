@@ -18,6 +18,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/glue"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/iot"
+	"github.com/aws/aws-sdk-go-v2/service/iotdataplane"
 	"github.com/aws/aws-sdk-go-v2/service/kinesis"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
@@ -145,6 +146,11 @@ func PipesClient() *pipes.Client {
 // IoTClient returns a new AWS IoT client.
 func IoTClient() *iot.Client {
 	return iot.NewFromConfig(Config())
+}
+
+// IoTDataClient returns a new AWS IoT Data Plane client.
+func IoTDataClient() *iotdataplane.Client {
+	return iotdataplane.NewFromConfig(Config())
 }
 
 // RDSClient returns a new RDS client.

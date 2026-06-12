@@ -380,9 +380,15 @@ public interface EmulatorConfig {
         AppSyncServiceConfig appsync();
         BatchServiceConfig batch();
         IotServiceConfig iot();
+        IotDataServiceConfig iotdata();
     }
 
     interface IotServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+    }
+
+    interface IotDataServiceConfig {
         @WithDefault("true")
         boolean enabled();
     }
