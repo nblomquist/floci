@@ -9,8 +9,12 @@ import software.amazon.awssdk.services.iot.model.DeleteThingRequest;
 import software.amazon.awssdk.services.iot.model.DescribeEndpointRequest;
 import software.amazon.awssdk.services.iot.model.DescribeThingRequest;
 import software.amazon.awssdk.services.iot.model.ListThingsRequest;
+import software.amazon.awssdk.services.iot.model.ListTagsForResourceRequest;
 import software.amazon.awssdk.services.iot.model.ResourceAlreadyExistsException;
 import software.amazon.awssdk.services.iot.model.ResourceNotFoundException;
+import software.amazon.awssdk.services.iot.model.Tag;
+import software.amazon.awssdk.services.iot.model.TagResourceRequest;
+import software.amazon.awssdk.services.iot.model.UntagResourceRequest;
 import software.amazon.awssdk.services.iot.model.UpdateThingRequest;
 
 import java.util.Map;
@@ -71,6 +75,50 @@ class IotTest {
 
         iot.deleteThing(DeleteThingRequest.builder().thingName(thingName).build());
         assertThatThrownBy(() -> iot.describeThing(DescribeThingRequest.builder().thingName(thingName).build()))
+                .isInstanceOf(ResourceNotFoundException.class);
+    }
+
+    @Test
+    void thingTags() {
+        String thingName = "java-iot-tagged-thing";
+        try {
+            iot.deleteThing(DeleteThingRequest.builder().thingName(thingName).build());
+        } catch (Exception ignored) {
+        }
+
+        var created = iot.createThing(CreateThingRequest.builder().thingName(thingName).build());
+        String thingArn = created.thingArn();
+
+        var emptyTags = iot.listTagsForResource(ListTagsForResourceRequest.builder()
+                .resourceArn(thingArn)
+                .build());
+        assertThat(emptyTags.tags()).isEmpty();
+
+        iot.tagResource(TagResourceRequest.builder()
+                .resourceArn(thingArn)
+                .tags(Tag.builder().key("env").value("java").build(),
+                        Tag.builder().key("owner").value("iot").build())
+                .build());
+
+        var tags = iot.listTagsForResource(ListTagsForResourceRequest.builder()
+                .resourceArn(thingArn)
+                .build());
+        assertThat(tags.tags()).extracting(Tag::key).containsExactlyInAnyOrder("env", "owner");
+        assertThat(tags.tags()).extracting(Tag::value).contains("java", "iot");
+
+        iot.untagResource(UntagResourceRequest.builder()
+                .resourceArn(thingArn)
+                .tagKeys("env")
+                .build());
+
+        var remainingTags = iot.listTagsForResource(ListTagsForResourceRequest.builder()
+                .resourceArn(thingArn)
+                .build());
+        assertThat(remainingTags.tags()).extracting(Tag::key).containsExactly("owner");
+
+        assertThatThrownBy(() -> iot.listTagsForResource(ListTagsForResourceRequest.builder()
+                .resourceArn("arn:aws:iot:us-east-1:000000000000:thing/missing-tagged-thing")
+                .build()))
                 .isInstanceOf(ResourceNotFoundException.class);
     }
 }

@@ -189,4 +189,121 @@ class IotIntegrationTest {
             .body("things.thingName", hasItem("phase-two-other"));
     }
 
+    @Test
+    @Order(11)
+    void listTagsForUntaggedThingReturnsEmptyList() {
+        String thingArn = createThingAndReturnArn("phase-three-untagged");
+
+        given()
+            .queryParam("resourceArn", thingArn)
+        .when()
+            .get("/tags")
+        .then()
+            .statusCode(200)
+            .body("tags.size()", equalTo(0));
+    }
+
+    @Test
+    @Order(12)
+    void tagResourceAddsThingTags() {
+        String thingArn = createThingAndReturnArn("phase-three-tagged");
+
+        given()
+            .contentType("application/json")
+            .body("""
+                {
+                  "resourceArn": "%s",
+                  "tags": [
+                    {"Key": "env", "Value": "test"},
+                    {"Key": "owner", "Value": "iot"}
+                  ]
+                }
+                """.formatted(thingArn))
+        .when()
+            .post("/tags")
+        .then()
+            .statusCode(200);
+
+        given()
+            .queryParam("resourceArn", thingArn)
+        .when()
+            .get("/tags")
+        .then()
+            .statusCode(200)
+            .body("tags.Key", hasItem("env"))
+            .body("tags.Value", hasItem("test"))
+            .body("tags.Key", hasItem("owner"))
+            .body("tags.Value", hasItem("iot"));
+    }
+
+    @Test
+    @Order(13)
+    void untagResourceRemovesSelectedThingTags() {
+        String thingArn = createThingAndReturnArn("phase-three-untag");
+
+        given()
+            .contentType("application/json")
+            .body("""
+                {
+                  "resourceArn": "%s",
+                  "tags": [
+                    {"Key": "env", "Value": "test"},
+                    {"Key": "owner", "Value": "iot"}
+                  ]
+                }
+                """.formatted(thingArn))
+        .when()
+            .post("/tags")
+        .then()
+            .statusCode(200);
+
+        given()
+            .contentType("application/json")
+            .body("""
+                {
+                  "resourceArn": "%s",
+                  "tagKeys": ["env"]
+                }
+                """.formatted(thingArn))
+        .when()
+            .post("/untag")
+        .then()
+            .statusCode(200);
+
+        given()
+            .queryParam("resourceArn", thingArn)
+        .when()
+            .get("/tags")
+        .then()
+            .statusCode(200)
+            .body("tags.Key", not(hasItem("env")))
+            .body("tags.Key", hasItem("owner"));
+    }
+
+    @Test
+    @Order(14)
+    void taggingMissingThingReturnsAwsError() {
+        String missingThingArn = "arn:aws:iot:us-east-1:000000000000:thing/phase-three-missing";
+
+        given()
+            .queryParam("resourceArn", missingThingArn)
+        .when()
+            .get("/tags")
+        .then()
+            .statusCode(404)
+            .body("__type", equalTo("ResourceNotFoundException"));
+    }
+
+    private String createThingAndReturnArn(String thingName) {
+        return given()
+            .contentType("application/json")
+            .body("{}")
+        .when()
+            .post("/things/" + thingName)
+        .then()
+            .statusCode(200)
+            .extract()
+            .path("thingArn");
+    }
+
 }
