@@ -203,3 +203,5 @@ floci:
       enabled: true
     appsync:
       enabled: true
+    iot:
+      enabled: true

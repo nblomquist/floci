@@ -367,6 +367,12 @@ public interface EmulatorConfig {
         CloudTrailServiceConfig cloudtrail();
         CloudFrontServiceConfig cloudfront();
         AppSyncServiceConfig appsync();
+        IotServiceConfig iot();
+    }
+
+    interface IotServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
     }
 
     interface CloudTrailServiceConfig {

@@ -181,6 +181,12 @@ def sesv2_client(aws_config, client_config):
     return boto3.client("sesv2", config=client_config, **aws_config)
 
 
+@pytest.fixture
+def iot_client(aws_config, client_config):
+    """Create AWS IoT client."""
+    return boto3.client("iot", config=client_config, **aws_config)
+
+
 # ============================================
 # Utility Fixtures
 # ============================================
