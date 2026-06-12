@@ -294,6 +294,121 @@ class IotIntegrationTest {
             .body("__type", equalTo("ResourceNotFoundException"));
     }
 
+    @Test
+    @Order(15)
+    void certificatesPoliciesAndAttachmentsRoundTrip() {
+        String certificateArn = given()
+            .contentType("application/json")
+            .queryParam("setAsActive", true)
+            .body("{}")
+        .when()
+            .post("/keys-and-certificate")
+        .then()
+            .statusCode(200)
+            .body("certificateId", notNullValue())
+            .body("certificateArn", containsString(":iot:us-east-1:000000000000:cert/"))
+            .body("certificatePem", containsString("BEGIN CERTIFICATE"))
+            .body("keyPair.PublicKey", containsString("BEGIN PUBLIC KEY"))
+            .body("keyPair.PrivateKey", containsString("BEGIN PRIVATE KEY"))
+            .extract()
+            .path("certificateArn");
+        String certificateId = certificateArn.substring(certificateArn.lastIndexOf('/') + 1);
+
+        given()
+        .when()
+            .get("/certificates/" + certificateId)
+        .then()
+            .statusCode(200)
+            .body("certificateDescription.status", equalTo("ACTIVE"))
+            .body("certificateDescription.certificateArn", equalTo(certificateArn));
+
+        given()
+        .when()
+            .get("/certificates")
+        .then()
+            .statusCode(200)
+            .body("certificates.certificateArn", hasItem(certificateArn));
+
+        given()
+            .contentType("application/json")
+            .body("{\"newStatus\":\"INACTIVE\"}")
+        .when()
+            .put("/certificates/" + certificateId)
+        .then()
+            .statusCode(200);
+
+        given()
+        .when()
+            .get("/certificates/" + certificateId)
+        .then()
+            .statusCode(200)
+            .body("certificateDescription.status", equalTo("INACTIVE"));
+
+        given()
+            .contentType("application/json")
+            .body("""
+                {
+                  "policyDocument": "{\\\"Version\\\":\\\"2012-10-17\\\",\\\"Statement\\\":[]}"
+                }
+                """)
+        .when()
+            .post("/policies/phase-four-policy")
+        .then()
+            .statusCode(200)
+            .body("policyName", equalTo("phase-four-policy"));
+
+        given()
+        .when()
+            .get("/policies/phase-four-policy")
+        .then()
+            .statusCode(200)
+            .body("policyName", equalTo("phase-four-policy"))
+            .body("policyDocument", containsString("2012-10-17"));
+
+        given()
+        .when()
+            .get("/policies")
+        .then()
+            .statusCode(200)
+            .body("policies.policyName", hasItem("phase-four-policy"));
+
+        given()
+            .queryParam("target", certificateArn)
+        .when()
+            .put("/target-policies/phase-four-policy")
+        .then()
+            .statusCode(200);
+
+        String thingArn = createThingAndReturnArn("phase-four-principal-thing");
+        given()
+            .queryParam("principal", certificateArn)
+        .when()
+            .put("/things/phase-four-principal-thing/principals")
+        .then()
+            .statusCode(200);
+
+        given()
+        .when()
+            .get("/things/phase-four-principal-thing/principals")
+        .then()
+            .statusCode(200)
+            .body("principals", hasItem(certificateArn));
+
+        given()
+            .queryParam("principal", certificateArn)
+        .when()
+            .delete("/things/phase-four-principal-thing/principals")
+        .then()
+            .statusCode(200);
+
+        given()
+            .queryParam("target", certificateArn)
+        .when()
+            .post("/target-policies/phase-four-policy")
+        .then()
+            .statusCode(200);
+    }
+
     private String createThingAndReturnArn(String thingName) {
         return given()
             .contentType("application/json")

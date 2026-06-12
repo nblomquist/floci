@@ -1,11 +1,17 @@
 package io.github.hectorvent.floci.services.iot;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
+import io.github.hectorvent.floci.services.iot.model.IotCertificate;
+import io.github.hectorvent.floci.services.iot.model.IotPolicy;
+import io.github.hectorvent.floci.services.iot.model.IotShadow;
 import io.github.hectorvent.floci.services.iot.model.Thing;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -13,8 +19,10 @@ import jakarta.inject.Inject;
 import java.net.URI;
 import java.time.Instant;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.UUID;
 import java.util.regex.Pattern;
@@ -27,19 +35,44 @@ public class IotService {
     private static final Pattern THING_NAME_PATTERN = Pattern.compile("[a-zA-Z0-9:_-]{1,128}");
 
     private final StorageBackend<String, Thing> thingStore;
+    private final StorageBackend<String, IotCertificate> certificateStore;
+    private final StorageBackend<String, IotPolicy> policyStore;
+    private final StorageBackend<String, Set<String>> policyAttachmentStore;
+    private final StorageBackend<String, Set<String>> thingPrincipalStore;
+    private final StorageBackend<String, IotShadow> shadowStore;
     private final EmulatorConfig config;
     private final RegionResolver regionResolver;
+    private final ObjectMapper objectMapper;
 
     @Inject
-    public IotService(StorageFactory storageFactory, EmulatorConfig config, RegionResolver regionResolver) {
+    public IotService(StorageFactory storageFactory, EmulatorConfig config, RegionResolver regionResolver, ObjectMapper objectMapper) {
         this(storageFactory.create("iot", "iot-things.json", new TypeReference<Map<String, Thing>>() {}),
-                config, regionResolver);
+                storageFactory.create("iot", "iot-certificates.json", new TypeReference<Map<String, IotCertificate>>() {}),
+                storageFactory.create("iot", "iot-policies.json", new TypeReference<Map<String, IotPolicy>>() {}),
+                storageFactory.create("iot", "iot-policy-attachments.json", new TypeReference<Map<String, Set<String>>>() {}),
+                storageFactory.create("iot", "iot-thing-principals.json", new TypeReference<Map<String, Set<String>>>() {}),
+                storageFactory.create("iot", "iot-shadows.json", new TypeReference<Map<String, IotShadow>>() {}),
+                config, regionResolver, objectMapper);
     }
 
-    IotService(StorageBackend<String, Thing> thingStore, EmulatorConfig config, RegionResolver regionResolver) {
+    IotService(StorageBackend<String, Thing> thingStore,
+               StorageBackend<String, IotCertificate> certificateStore,
+               StorageBackend<String, IotPolicy> policyStore,
+               StorageBackend<String, Set<String>> policyAttachmentStore,
+               StorageBackend<String, Set<String>> thingPrincipalStore,
+               StorageBackend<String, IotShadow> shadowStore,
+               EmulatorConfig config,
+               RegionResolver regionResolver,
+               ObjectMapper objectMapper) {
         this.thingStore = thingStore;
+        this.certificateStore = certificateStore;
+        this.policyStore = policyStore;
+        this.policyAttachmentStore = policyAttachmentStore;
+        this.thingPrincipalStore = thingPrincipalStore;
+        this.shadowStore = shadowStore;
         this.config = config;
         this.regionResolver = regionResolver;
+        this.objectMapper = objectMapper;
     }
 
     public String describeEndpoint(String endpointType) {
@@ -119,6 +152,141 @@ public class IotService {
         thingStore.put(thingKey(regionFromArn(resourceArn), thing.getThingName()), thing);
     }
 
+    public IotCertificate createKeysAndCertificate(boolean setAsActive, String region) {
+        String id = UUID.randomUUID().toString().replace("-", "") + UUID.randomUUID().toString().replace("-", "");
+        IotCertificate certificate = new IotCertificate();
+        certificate.setCertificateId(id);
+        certificate.setCertificateArn(regionResolver.buildArn("iot", region, "cert/" + id));
+        certificate.setCertificatePem("-----BEGIN CERTIFICATE-----\n" + id + "\n-----END CERTIFICATE-----");
+        certificate.setPublicKey("-----BEGIN PUBLIC KEY-----\n" + id + "\n-----END PUBLIC KEY-----");
+        certificate.setPrivateKey("-----BEGIN PRIVATE KEY-----\n" + id + "\n-----END PRIVATE KEY-----");
+        certificate.setStatus(setAsActive ? "ACTIVE" : "INACTIVE");
+        certificate.setCreationDate(Instant.now());
+        certificateStore.put(certificateKey(region, id), certificate);
+        return certificate;
+    }
+
+    public IotCertificate describeCertificate(String certificateId, String region) {
+        return certificateStore.get(certificateKey(region, certificateId))
+                .orElseThrow(() -> new AwsException("ResourceNotFoundException", "Certificate not found: " + certificateId, 404));
+    }
+
+    public List<IotCertificate> listCertificates(String region) {
+        String prefix = "cert:" + region + ":";
+        return certificateStore.scan(key -> key.startsWith(prefix)).stream()
+                .sorted(Comparator.comparing(IotCertificate::getCertificateId))
+                .toList();
+    }
+
+    public void updateCertificate(String certificateId, String status, String region) {
+        IotCertificate certificate = describeCertificate(certificateId, region);
+        certificate.setStatus(status);
+        certificateStore.put(certificateKey(region, certificateId), certificate);
+    }
+
+    public IotPolicy createPolicy(String policyName, String policyDocument, String region) {
+        IotPolicy policy = new IotPolicy();
+        policy.setPolicyName(policyName);
+        policy.setPolicyArn(regionResolver.buildArn("iot", region, "policy/" + policyName));
+        policy.setPolicyDocument(policyDocument);
+        policy.setDefaultVersionId("1");
+        policy.setCreationDate(Instant.now());
+        policyStore.put(policyKey(region, policyName), policy);
+        return policy;
+    }
+
+    public IotPolicy getPolicy(String policyName, String region) {
+        return policyStore.get(policyKey(region, policyName))
+                .orElseThrow(() -> new AwsException("ResourceNotFoundException", "Policy not found: " + policyName, 404));
+    }
+
+    public List<IotPolicy> listPolicies(String region) {
+        String prefix = "policy:" + region + ":";
+        return policyStore.scan(key -> key.startsWith(prefix)).stream()
+                .sorted(Comparator.comparing(IotPolicy::getPolicyName))
+                .toList();
+    }
+
+    public void attachPolicy(String policyName, String target, String region) {
+        getPolicy(policyName, region);
+        Set<String> targets = new HashSet<>(policyAttachmentStore.get(policyAttachmentKey(region, policyName)).orElse(Set.of()));
+        targets.add(target);
+        policyAttachmentStore.put(policyAttachmentKey(region, policyName), targets);
+    }
+
+    public void detachPolicy(String policyName, String target, String region) {
+        Set<String> targets = new HashSet<>(policyAttachmentStore.get(policyAttachmentKey(region, policyName)).orElse(Set.of()));
+        targets.remove(target);
+        policyAttachmentStore.put(policyAttachmentKey(region, policyName), targets);
+    }
+
+    public void attachThingPrincipal(String thingName, String principal, String region) {
+        describeThing(thingName, region);
+        if (principal == null || principal.isBlank()) {
+            throw new AwsException("InvalidRequestException", "Principal is required", 400);
+        }
+        Set<String> principals = new HashSet<>(thingPrincipalStore.get(thingPrincipalKey(region, thingName)).orElse(Set.of()));
+        principals.add(principal);
+        thingPrincipalStore.put(thingPrincipalKey(region, thingName), principals);
+    }
+
+    public void detachThingPrincipal(String thingName, String principal, String region) {
+        Set<String> principals = new HashSet<>(thingPrincipalStore.get(thingPrincipalKey(region, thingName)).orElse(Set.of()));
+        principals.remove(principal);
+        thingPrincipalStore.put(thingPrincipalKey(region, thingName), principals);
+    }
+
+    public Set<String> listThingPrincipals(String thingName, String region) {
+        describeThing(thingName, region);
+        return new java.util.TreeSet<>(thingPrincipalStore.get(thingPrincipalKey(region, thingName)).orElse(Set.of()));
+    }
+
+    public JsonNode getThingShadow(String thingName, String shadowName, String region) {
+        IotShadow shadow = shadowStore.get(shadowKey(region, thingName, shadowName))
+                .orElseThrow(() -> new AwsException("ResourceNotFoundException", "Shadow not found: " + thingName, 404));
+        return readJson(shadow.getDocument());
+    }
+
+    public JsonNode updateThingShadow(String thingName, String shadowName, JsonNode request, String region) {
+        String key = shadowKey(region, thingName, shadowName);
+        IotShadow existing = shadowStore.get(key).orElse(null);
+        ObjectNode document = existing == null ? objectMapper.createObjectNode() : (ObjectNode) readJson(existing.getDocument()).deepCopy();
+        ObjectNode state = document.withObject("/state");
+        JsonNode requestState = request.path("state");
+        mergeObject(state, "desired", requestState.path("desired"));
+        mergeObject(state, "reported", requestState.path("reported"));
+        long version = existing == null ? 1 : existing.getVersion() + 1;
+        document.put("version", version);
+        document.put("timestamp", Instant.now().getEpochSecond());
+
+        IotShadow shadow = new IotShadow();
+        shadow.setThingName(thingName);
+        shadow.setShadowName(shadowName);
+        shadow.setVersion(version);
+        shadow.setDocument(document.toString());
+        shadowStore.put(key, shadow);
+        return document;
+    }
+
+    public JsonNode deleteThingShadow(String thingName, String shadowName, String region) {
+        JsonNode document = getThingShadow(thingName, shadowName, region);
+        shadowStore.delete(shadowKey(region, thingName, shadowName));
+        return document;
+    }
+
+    public List<String> listNamedShadowsForThing(String thingName, String region) {
+        String prefix = "shadow:" + region + ":" + thingName + ":";
+        return shadowStore.scan(key -> key.startsWith(prefix)).stream()
+                .map(IotShadow::getShadowName)
+                .filter(name -> name != null && !name.isBlank())
+                .sorted()
+                .toList();
+    }
+
+    public void publish(String topic, byte[] payload) {
+        // REST Publish is accepted for later MQTT/rules bridging; no public sink exists yet.
+    }
+
     private void validateThingName(String thingName) {
         if (thingName == null || !THING_NAME_PATTERN.matcher(thingName).matches()) {
             throw new AwsException("InvalidRequestException", "Invalid thing name: " + thingName, 400);
@@ -127,6 +295,28 @@ public class IotService {
 
     private String thingKey(String region, String thingName) {
         return "thing:" + region + ":" + thingName;
+    }
+
+    private String certificateKey(String region, String certificateId) { return "cert:" + region + ":" + certificateId; }
+    private String policyKey(String region, String policyName) { return "policy:" + region + ":" + policyName; }
+    private String policyAttachmentKey(String region, String policyName) { return "policy-attachment:" + region + ":" + policyName; }
+    private String thingPrincipalKey(String region, String thingName) { return "thing-principal:" + region + ":" + thingName; }
+    private String shadowKey(String region, String thingName, String shadowName) { return "shadow:" + region + ":" + thingName + ":" + (shadowName == null ? "" : shadowName); }
+
+    private JsonNode readJson(String json) {
+        try {
+            return objectMapper.readTree(json);
+        } catch (Exception e) {
+            throw new AwsException("InvalidRequestException", e.getMessage(), 400);
+        }
+    }
+
+    private void mergeObject(ObjectNode parent, String field, JsonNode patch) {
+        if (patch == null || !patch.isObject()) {
+            return;
+        }
+        ObjectNode target = parent.withObject("/" + field);
+        patch.fields().forEachRemaining(entry -> target.set(entry.getKey(), entry.getValue()));
     }
 
     private Thing thingForArn(String resourceArn) {

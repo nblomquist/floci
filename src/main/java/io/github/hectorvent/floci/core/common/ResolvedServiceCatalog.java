@@ -10,6 +10,7 @@ import io.github.hectorvent.floci.services.cognito.CognitoOAuthController;
 import io.github.hectorvent.floci.services.cognito.CognitoWellKnownController;
 import io.github.hectorvent.floci.services.eks.EksController;
 import io.github.hectorvent.floci.services.iot.IotController;
+import io.github.hectorvent.floci.services.iot.IotDataController;
 import io.github.hectorvent.floci.services.pipes.PipesController;
 import io.github.hectorvent.floci.services.lambda.LambdaController;
 import io.github.hectorvent.floci.services.opensearch.OpenSearchController;
@@ -342,7 +343,11 @@ public class ResolvedServiceCatalog {
                 descriptor("iot", "iot", config.services().iot().enabled(), true,
                         "iot", config.storage().mode(), 5000L, null, ServiceProtocol.REST_JSON,
                         protocols(ServiceProtocol.REST_JSON),
-                        Set.of(), Set.of("iot", "execute-api"), Set.of(), Set.of(IotController.class))
+                        Set.of(), Set.of("iot", "execute-api"), Set.of(), Set.of(IotController.class)),
+                descriptor("iotdata", "iotdata", config.services().iotdata().enabled(), true,
+                        "iot", config.storage().mode(), 5000L, null, ServiceProtocol.REST_JSON,
+                        protocols(ServiceProtocol.REST_JSON),
+                        Set.of(), Set.of("iotdata"), Set.of(), Set.of(IotDataController.class))
         ));
     }
 

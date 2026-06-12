@@ -414,9 +414,15 @@ public interface EmulatorConfig {
         UiServiceConfig ui();
         S3VectorsServiceConfig s3vectors();
         IotServiceConfig iot();
+        IotDataServiceConfig iotdata();
     }
 
     interface IotServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+    }
+
+    interface IotDataServiceConfig {
         @WithDefault("true")
         boolean enabled();
     }
