@@ -10,6 +10,7 @@ public class Thing {
     private String thingArn;
     private String thingId;
     private Map<String, String> attributes = new HashMap<>();
+    private Map<String, String> tags = new HashMap<>();
     private long version;
     private Instant creationDate;
     private Instant lastModifiedDate;
@@ -44,6 +45,14 @@ public class Thing {
 
     public void setAttributes(Map<String, String> attributes) {
         this.attributes = attributes != null ? new HashMap<>(attributes) : new HashMap<>();
+    }
+
+    public Map<String, String> getTags() {
+        return tags;
+    }
+
+    public void setTags(Map<String, String> tags) {
+        this.tags = tags != null ? new HashMap<>(tags) : new HashMap<>();
     }
 
     public long getVersion() {
