@@ -49,3 +49,32 @@ def test_thing_registry_crud(iot_client, unique_name):
         raise AssertionError("describe after delete should fail")
     except ClientError as exc:
         assert exc.response["Error"]["Code"] == "ResourceNotFoundException"
+
+
+def test_thing_tags(iot_client, unique_name):
+    thing_name = f"{unique_name}-tagged-thing"
+
+    created = iot_client.create_thing(thingName=thing_name)
+    thing_arn = created["thingArn"]
+
+    listed = iot_client.list_tags_for_resource(resourceArn=thing_arn)
+    assert listed["tags"] == []
+
+    iot_client.tag_resource(
+        resourceArn=thing_arn,
+        tags=[{"Key": "env", "Value": "python"}, {"Key": "owner", "Value": "iot"}],
+    )
+    tags = iot_client.list_tags_for_resource(resourceArn=thing_arn)["tags"]
+    assert {tag["Key"]: tag["Value"] for tag in tags} == {"env": "python", "owner": "iot"}
+
+    iot_client.untag_resource(resourceArn=thing_arn, tagKeys=["env"])
+    tags = iot_client.list_tags_for_resource(resourceArn=thing_arn)["tags"]
+    assert {tag["Key"]: tag["Value"] for tag in tags} == {"owner": "iot"}
+
+    try:
+        iot_client.list_tags_for_resource(
+            resourceArn="arn:aws:iot:us-east-1:000000000000:thing/missing-tagged-thing"
+        )
+        raise AssertionError("listing tags on a missing thing should fail")
+    except ClientError as exc:
+        assert exc.response["Error"]["Code"] == "ResourceNotFoundException"

@@ -24,7 +24,9 @@ import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 @Path("/")
@@ -107,6 +109,18 @@ public class IotController {
         return Response.ok(objectMapper.createObjectNode()).build();
     }
 
+    @POST
+    @Path("/untag")
+    public Response untagResource(String body) {
+        try {
+            JsonNode request = objectMapper.readTree(body == null || body.isBlank() ? "{}" : body);
+            iotService.untagResource(request.path("resourceArn").asText(null), parseTagKeys(request.path("tagKeys")));
+            return Response.ok(objectMapper.createObjectNode()).build();
+        } catch (JsonProcessingException e) {
+            throw new AwsException("InvalidRequestException", e.getMessage(), 400);
+        }
+    }
+
     private Map<String, String> parseAttributes(String body) {
         try {
             JsonNode request = objectMapper.readTree(body == null || body.isBlank() ? "{}" : body);
@@ -127,6 +141,14 @@ public class IotController {
         } catch (JsonProcessingException e) {
             throw new AwsException("InvalidRequestException", e.getMessage(), 400);
         }
+    }
+
+    private List<String> parseTagKeys(JsonNode tagKeysNode) {
+        List<String> tagKeys = new ArrayList<>();
+        if (tagKeysNode != null && tagKeysNode.isArray()) {
+            tagKeysNode.forEach(tagKey -> tagKeys.add(tagKey.asText()));
+        }
+        return tagKeys;
     }
 
     private ObjectNode buildThingResponse(Thing thing) {
