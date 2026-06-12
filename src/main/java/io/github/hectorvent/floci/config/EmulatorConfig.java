@@ -413,6 +413,12 @@ public interface EmulatorConfig {
         BatchServiceConfig batch();
         UiServiceConfig ui();
         S3VectorsServiceConfig s3vectors();
+        IotServiceConfig iot();
+    }
+
+    interface IotServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
     }
 
     interface CloudTrailServiceConfig {

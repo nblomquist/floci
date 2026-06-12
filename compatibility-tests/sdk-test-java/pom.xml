@@ -241,6 +241,11 @@
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>pipes</artifactId>
         </dependency>
+        <!-- AWS IoT client -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>iot</artifactId>
+        </dependency>
         <!-- EKS client -->
         <dependency>
             <groupId>software.amazon.awssdk</groupId>

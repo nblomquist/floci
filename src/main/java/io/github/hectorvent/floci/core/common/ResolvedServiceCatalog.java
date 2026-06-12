@@ -9,6 +9,7 @@ import io.github.hectorvent.floci.services.bedrockruntime.BedrockRuntimeControll
 import io.github.hectorvent.floci.services.cognito.CognitoOAuthController;
 import io.github.hectorvent.floci.services.cognito.CognitoWellKnownController;
 import io.github.hectorvent.floci.services.eks.EksController;
+import io.github.hectorvent.floci.services.iot.IotController;
 import io.github.hectorvent.floci.services.pipes.PipesController;
 import io.github.hectorvent.floci.services.lambda.LambdaController;
 import io.github.hectorvent.floci.services.opensearch.OpenSearchController;
@@ -337,7 +338,11 @@ public class ResolvedServiceCatalog {
                         "s3vectors", storageMode(config.storage().services().s3vectors().mode(), config.storage().mode()),
                         config.storage().services().s3vectors().flushIntervalMs(), null, ServiceProtocol.REST_JSON,
                         protocols(ServiceProtocol.REST_JSON),
-                        Set.of(), Set.of("s3vectors"), Set.of(), Set.of(S3VectorsController.class))
+                        Set.of(), Set.of("s3vectors"), Set.of(), Set.of(S3VectorsController.class)),
+                descriptor("iot", "iot", config.services().iot().enabled(), true,
+                        "iot", config.storage().mode(), 5000L, null, ServiceProtocol.REST_JSON,
+                        protocols(ServiceProtocol.REST_JSON),
+                        Set.of(), Set.of("iot", "execute-api"), Set.of(), Set.of(IotController.class))
         ));
     }
 
