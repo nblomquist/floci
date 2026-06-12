@@ -205,3 +205,5 @@ floci:
       enabled: true
     iot:
       enabled: true
+    iotdata:
+      enabled: true

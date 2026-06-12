@@ -368,9 +368,15 @@ public interface EmulatorConfig {
         CloudFrontServiceConfig cloudfront();
         AppSyncServiceConfig appsync();
         IotServiceConfig iot();
+        IotDataServiceConfig iotdata();
     }
 
     interface IotServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+    }
+
+    interface IotDataServiceConfig {
         @WithDefault("true")
         boolean enabled();
     }
