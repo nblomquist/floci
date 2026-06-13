@@ -45,6 +45,13 @@ class IotMqttEnabledIntegrationTest {
     }
 
     @Test
+    void enabledMqttAcceptsMqtt5Connect() throws Exception {
+        try (Socket client = connectMqtt5("phase6-connect-v5")) {
+            assertTrue(client.isConnected());
+        }
+    }
+
+    @Test
     void mqttPublishEmitsEventAndDeliversToSubscriber() throws Exception {
         String topic = "phase6/devices/one/events";
         byte[] payload = "hello-phase-six".getBytes(StandardCharsets.UTF_8);
@@ -72,6 +79,31 @@ class IotMqttEnabledIntegrationTest {
         byte[] connack = readPacket(socket.getInputStream());
         assertArrayEquals(new byte[] {0x20, 0x02, 0x00, 0x00}, connack);
         return socket;
+    }
+
+    private Socket connectMqtt5(String clientId) throws IOException {
+        Socket socket = new Socket();
+        socket.connect(new InetSocketAddress("127.0.0.1", PORT), 2_000);
+        socket.setSoTimeout(2_000);
+        ByteArrayOutputStream variable = new ByteArrayOutputStream();
+        writeUtf8(variable, "MQTT");
+        variable.write(0x05);
+        variable.write(0x02);
+        variable.write(0x00);
+        variable.write(0x3c);
+        variable.write(0x00);
+        writeUtf8(variable, clientId);
+        socket.getOutputStream().write(packet(0x10, variable.toByteArray()));
+        byte[] connack = readPacket(socket.getInputStream());
+        assertMqtt5SuccessConnack(connack);
+        return socket;
+    }
+
+    private void assertMqtt5SuccessConnack(byte[] connack) {
+        assertEquals(0x20, connack[0] & 0xff);
+        int position = 1 + remainingLengthBytes(connack);
+        assertEquals(0x00, connack[position] & 0xff);
+        assertEquals(0x00, connack[position + 1] & 0xff);
     }
 
     private byte[] connectPacket(String clientId) throws IOException {

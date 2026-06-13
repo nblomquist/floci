@@ -46,6 +46,13 @@
         </dependencies>
     </dependencyManagement>
 
+    <repositories>
+        <repository>
+            <id>jitpack.io</id>
+            <url>https://jitpack.io</url>
+        </repository>
+    </repositories>
+
     <dependencies>
         <!-- Quarkus REST (RESTEasy Reactive) -->
         <dependency>
@@ -171,9 +178,9 @@
 
         <!-- Embedded MQTT broker for AWS IoT Core compatibility. -->
         <dependency>
-            <groupId>io.moquette</groupId>
+            <groupId>com.github.moquette-io.moquette</groupId>
             <artifactId>moquette-broker</artifactId>
-            <version>0.17</version>
+            <version>0.18.0</version>
             <exclusions>
                 <exclusion>
                     <groupId>org.slf4j</groupId>

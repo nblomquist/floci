@@ -173,6 +173,11 @@ def test_mqtt_connect_publish_subscribe(unique_name):
     assert received_payload == payload
 
 
+def test_mqtt5_connect(unique_name):
+    with mqtt5_connect(f"{unique_name}-mqtt5") as client:
+        assert client
+
+
 def mqtt_connect(client_id):
     client = socket.create_connection(("floci", 1883), timeout=5)
     client.settimeout(5)
@@ -180,6 +185,25 @@ def mqtt_connect(client_id):
     client.sendall(bytes([0x10]) + mqtt_remaining_length(len(body)) + body)
     assert mqtt_read_packet(client) == b"\x20\x02\x00\x00"
     return client
+
+
+def mqtt5_connect(client_id):
+    client = socket.create_connection(("floci", 1883), timeout=5)
+    client.settimeout(5)
+    body = mqtt_utf8("MQTT") + bytes([5, 2, 0, 60, 0]) + mqtt_utf8(client_id)
+    client.sendall(bytes([0x10]) + mqtt_remaining_length(len(body)) + body)
+    mqtt_assert_v5_connack(mqtt_read_packet(client))
+    return client
+
+
+def mqtt_assert_v5_connack(packet):
+    assert packet[0] == 0x20
+    index = 1
+    while packet[index] & 0x80:
+        index += 1
+    index += 1
+    assert packet[index] == 0x00
+    assert packet[index + 1] == 0x00
 
 
 def mqtt_subscribe(client, topic):
