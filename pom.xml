@@ -48,6 +48,10 @@
 
     <repositories>
         <repository>
+            <id>floci-vendor</id>
+            <url>file://${project.basedir}/vendor/maven</url>
+        </repository>
+        <repository>
             <id>jitpack.io</id>
             <url>https://jitpack.io</url>
         </repository>
@@ -180,7 +184,7 @@
         <dependency>
             <groupId>com.github.moquette-io.moquette</groupId>
             <artifactId>moquette-broker</artifactId>
-            <version>0.18.0</version>
+            <version>0.18.0-floci-1</version>
             <exclusions>
                 <exclusion>
                     <groupId>org.slf4j</groupId>

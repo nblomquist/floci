@@ -1,16 +1,23 @@
 package io.github.hectorvent.floci.services.iot;
 
 import io.github.hectorvent.floci.config.EmulatorConfig;
+import io.moquette.BrokerConstants;
 import io.moquette.broker.Server;
 import io.moquette.broker.config.IConfig;
 import io.moquette.broker.config.MemoryConfig;
 import io.moquette.interception.AbstractInterceptHandler;
 import io.moquette.interception.messages.InterceptPublishMessage;
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
+import io.netty.handler.codec.mqtt.MqttMessageBuilders;
+import io.netty.handler.codec.mqtt.MqttProperties;
+import io.netty.handler.codec.mqtt.MqttPublishMessage;
+import io.netty.handler.codec.mqtt.MqttQoS;
 import io.quarkus.runtime.ShutdownEvent;
 import io.quarkus.runtime.StartupEvent;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
+import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
@@ -22,15 +29,19 @@ import java.util.Properties;
 public class IotMqttBrokerService {
 
     private static final Logger LOG = Logger.getLogger(IotMqttBrokerService.class);
+    private static final String INTERNAL_CLIENT_ID = "floci-iot";
 
     private final EmulatorConfig config;
     private final IotPublishEventRecorder eventRecorder;
+    private final Instance<IotService> iotService;
     private Server server;
 
     @Inject
-    public IotMqttBrokerService(EmulatorConfig config, IotPublishEventRecorder eventRecorder) {
+    public IotMqttBrokerService(EmulatorConfig config, IotPublishEventRecorder eventRecorder,
+                                Instance<IotService> iotService) {
         this.config = config;
         this.eventRecorder = eventRecorder;
+        this.iotService = iotService;
     }
 
     void onStart(@Observes StartupEvent ignored) {
@@ -61,6 +72,7 @@ public class IotMqttBrokerService {
         properties.setProperty("host", config.services().iot().mqtt().host());
         properties.setProperty("port", Integer.toString(config.services().iot().mqtt().port()));
         properties.setProperty("allow_anonymous", "true");
+        properties.setProperty(BrokerConstants.ALLOW_RESERVED_PUBLISH_PREFIXES, "$aws/");
         IConfig brokerConfig = new MemoryConfig(properties);
 
         try {
@@ -87,6 +99,22 @@ public class IotMqttBrokerService {
         return server != null;
     }
 
+    void publish(String topic, byte[] payload) {
+        Server broker = server;
+        if (broker == null) {
+            return;
+        }
+        ByteBuf buffer = Unpooled.wrappedBuffer(payload == null ? new byte[0] : payload);
+        MqttPublishMessage message = MqttMessageBuilders.publish()
+                .topicName(topic)
+                .qos(MqttQoS.AT_MOST_ONCE)
+                .retained(false)
+                .payload(buffer)
+                .properties(MqttProperties.NO_PROPERTIES)
+                .build();
+        broker.internalPublish(message, INTERNAL_CLIENT_ID);
+    }
+
     private final class PublishInterceptor extends AbstractInterceptHandler {
         @Override
         public String getID() {
@@ -98,7 +126,14 @@ public class IotMqttBrokerService {
             ByteBuf payload = message.getPayload();
             byte[] bytes = new byte[payload.readableBytes()];
             payload.getBytes(payload.readerIndex(), bytes);
-            eventRecorder.record(message.getTopicName(), bytes);
+            String topic = message.getTopicName();
+
+            if (topic.startsWith("$aws/")) {
+                iotService.get().handleReservedMqttPublish(topic, bytes, IotMqttBrokerService.this::publish);
+                return;
+            }
+
+            eventRecorder.record(topic, bytes);
         }
 
         @Override

@@ -178,6 +178,40 @@ def test_mqtt5_connect(unique_name):
         assert client
 
 
+def test_mqtt_shadow_reserved_topics(unique_name):
+    thing_name = f"{unique_name}-shadow"
+    with mqtt_connect(f"{unique_name}-shadow-sub") as subscriber:
+        mqtt_subscribe(subscriber, f"$aws/things/{thing_name}/shadow/update/accepted")
+        mqtt_subscribe(subscriber, f"$aws/things/{thing_name}/shadow/get/accepted")
+        mqtt_subscribe(subscriber, f"$aws/things/{thing_name}/shadow/delete/accepted")
+
+        with mqtt_connect(f"{unique_name}-shadow-pub") as publisher:
+            mqtt_publish(
+                publisher,
+                f"$aws/things/{thing_name}/shadow/update",
+                json.dumps({"state": {"desired": {"color": "blue"}}, "clientToken": "update-token"}).encode(),
+            )
+            topic, payload = mqtt_read_publish(subscriber)
+            assert topic == f"$aws/things/{thing_name}/shadow/update/accepted"
+            accepted = json.loads(payload)
+            assert accepted["state"]["desired"]["color"] == "blue"
+            assert accepted["clientToken"] == "update-token"
+
+            mqtt_publish(publisher, f"$aws/things/{thing_name}/shadow/get", b'{"clientToken":"get-token"}')
+            topic, payload = mqtt_read_publish(subscriber)
+            assert topic == f"$aws/things/{thing_name}/shadow/get/accepted"
+            got = json.loads(payload)
+            assert got["state"]["desired"]["color"] == "blue"
+            assert got["clientToken"] == "get-token"
+
+            mqtt_publish(publisher, f"$aws/things/{thing_name}/shadow/delete", b'{"clientToken":"delete-token"}')
+            topic, payload = mqtt_read_publish(subscriber)
+            assert topic == f"$aws/things/{thing_name}/shadow/delete/accepted"
+            deleted = json.loads(payload)
+            assert deleted["state"]["desired"]["color"] == "blue"
+            assert deleted["clientToken"] == "delete-token"
+
+
 def mqtt_connect(client_id):
     client = socket.create_connection(("floci", 1883), timeout=5)
     client.settimeout(5)

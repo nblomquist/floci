@@ -249,6 +249,38 @@ func TestIoT(t *testing.T) {
 		client := mqtt5Connect(t, "go-iot-mqtt5")
 		client.Close()
 	})
+
+	t.Run("MqttShadowReservedTopics", func(t *testing.T) {
+		thingName := "go-iot-shadow"
+		subscriber := mqttConnect(t, "go-iot-shadow-sub")
+		defer subscriber.Close()
+		mqttSubscribe(t, subscriber, "$aws/things/"+thingName+"/shadow/update/accepted")
+		mqttSubscribe(t, subscriber, "$aws/things/"+thingName+"/shadow/get/accepted")
+		mqttSubscribe(t, subscriber, "$aws/things/"+thingName+"/shadow/delete/accepted")
+
+		publisher := mqttConnect(t, "go-iot-shadow-pub")
+		defer publisher.Close()
+		mqttPublish(t, publisher, "$aws/things/"+thingName+"/shadow/update", []byte(`{"state":{"desired":{"color":"blue"}},"clientToken":"update-token"}`))
+		topic, payload := mqttReadPublish(t, subscriber)
+		assert.Equal(t, "$aws/things/"+thingName+"/shadow/update/accepted", topic)
+		var accepted map[string]any
+		require.NoError(t, json.Unmarshal(payload, &accepted))
+		assert.Equal(t, "update-token", accepted["clientToken"])
+
+		mqttPublish(t, publisher, "$aws/things/"+thingName+"/shadow/get", []byte(`{"clientToken":"get-token"}`))
+		topic, payload = mqttReadPublish(t, subscriber)
+		assert.Equal(t, "$aws/things/"+thingName+"/shadow/get/accepted", topic)
+		var got map[string]any
+		require.NoError(t, json.Unmarshal(payload, &got))
+		assert.Equal(t, "get-token", got["clientToken"])
+
+		mqttPublish(t, publisher, "$aws/things/"+thingName+"/shadow/delete", []byte(`{"clientToken":"delete-token"}`))
+		topic, payload = mqttReadPublish(t, subscriber)
+		assert.Equal(t, "$aws/things/"+thingName+"/shadow/delete/accepted", topic)
+		var deleted map[string]any
+		require.NoError(t, json.Unmarshal(payload, &deleted))
+		assert.Equal(t, "delete-token", deleted["clientToken"])
+	})
 }
 
 func tagsByKey(tags []iottypes.Tag) map[string]string {

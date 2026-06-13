@@ -1,5 +1,7 @@
 package com.floci.test;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import software.amazon.awssdk.core.SdkBytes;
@@ -52,6 +54,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @DisplayName("AWS IoT")
 class IotTest {
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+
 
     private final IotClient iot = TestFixtures.iotClient();
     private final IotDataPlaneClient iotData = TestFixtures.iotDataClient();
@@ -271,6 +275,39 @@ class IotTest {
     void mqtt5Connect() throws Exception {
         try (Socket client = mqtt5Connect("java-iot-mqtt5")) {
             assertThat(client.isConnected()).isTrue();
+        }
+    }
+
+    @Test
+    void mqttShadowReservedTopics() throws Exception {
+        String thingName = "java-iot-shadow";
+        try (Socket subscriber = mqttConnect("java-iot-shadow-sub")) {
+            mqttSubscribe(subscriber, "$aws/things/" + thingName + "/shadow/update/accepted");
+            mqttSubscribe(subscriber, "$aws/things/" + thingName + "/shadow/get/accepted");
+            mqttSubscribe(subscriber, "$aws/things/" + thingName + "/shadow/delete/accepted");
+
+            try (Socket publisher = mqttConnect("java-iot-shadow-pub")) {
+                mqttPublish(publisher, "$aws/things/" + thingName + "/shadow/update",
+                        "{\"state\":{\"desired\":{\"color\":\"blue\"}},\"clientToken\":\"update-token\"}".getBytes(StandardCharsets.UTF_8));
+                MqttPublish accepted = mqttReadPublish(subscriber.getInputStream());
+                assertThat(accepted.topic()).isEqualTo("$aws/things/" + thingName + "/shadow/update/accepted");
+                JsonNode acceptedPayload = OBJECT_MAPPER.readTree(accepted.payload());
+                assertThat(acceptedPayload.path("clientToken").asText()).isEqualTo("update-token");
+
+                mqttPublish(publisher, "$aws/things/" + thingName + "/shadow/get",
+                        "{\"clientToken\":\"get-token\"}".getBytes(StandardCharsets.UTF_8));
+                MqttPublish got = mqttReadPublish(subscriber.getInputStream());
+                assertThat(got.topic()).isEqualTo("$aws/things/" + thingName + "/shadow/get/accepted");
+                JsonNode gotPayload = OBJECT_MAPPER.readTree(got.payload());
+                assertThat(gotPayload.path("clientToken").asText()).isEqualTo("get-token");
+
+                mqttPublish(publisher, "$aws/things/" + thingName + "/shadow/delete",
+                        "{\"clientToken\":\"delete-token\"}".getBytes(StandardCharsets.UTF_8));
+                MqttPublish deleted = mqttReadPublish(subscriber.getInputStream());
+                assertThat(deleted.topic()).isEqualTo("$aws/things/" + thingName + "/shadow/delete/accepted");
+                JsonNode deletedPayload = OBJECT_MAPPER.readTree(deleted.payload());
+                assertThat(deletedPayload.path("clientToken").asText()).isEqualTo("delete-token");
+            }
         }
     }
 

@@ -1,5 +1,7 @@
 package io.github.hectorvent.floci.services.iot;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.QuarkusTestProfile;
 import io.quarkus.test.junit.TestProfile;
@@ -28,6 +30,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class IotMqttEnabledIntegrationTest {
 
     private static final int PORT = 18831;
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     @Inject
     IotPublishEventRecorder eventRecorder;
@@ -69,6 +72,118 @@ class IotMqttEnabledIntegrationTest {
         }
 
         awaitPublishedEvent(topic, payload);
+    }
+
+    @Test
+    void shadowUpdateTopicPublishesAcceptedResponse() throws Exception {
+        try (Socket subscriber = connectMqtt("phase7-update-sub")) {
+            subscribe(subscriber, "$aws/things/phase7Thing/shadow/update/accepted");
+
+            try (Socket publisher = connectMqtt("phase7-update-pub")) {
+                publish(publisher, "$aws/things/phase7Thing/shadow/update",
+                        json("{\"state\":{\"desired\":{\"color\":\"blue\"}},\"clientToken\":\"token-1\"}"));
+            }
+
+            MqttPublish accepted = readPublish(subscriber.getInputStream());
+            JsonNode payload = readJson(accepted.payload());
+            assertEquals("$aws/things/phase7Thing/shadow/update/accepted", accepted.topic());
+            assertEquals("blue", payload.path("state").path("desired").path("color").asText());
+            assertEquals("token-1", payload.path("clientToken").asText());
+        }
+    }
+
+    @Test
+    void mqtt5ShadowUpdateTopicPublishesAcceptedResponse() throws Exception {
+        try (Socket subscriber = connectMqtt5("phase7-mqtt5-update-sub")) {
+            subscribeMqtt5(subscriber, "$aws/things/phase7Mqtt5Thing/shadow/update/accepted");
+
+            try (Socket publisher = connectMqtt5("phase7-mqtt5-update-pub")) {
+                publishMqtt5(publisher, "$aws/things/phase7Mqtt5Thing/shadow/update",
+                        json("{\"state\":{\"desired\":{\"color\":\"purple\"}},\"clientToken\":\"mqtt5-token\"}"));
+            }
+
+            MqttPublish accepted = readMqtt5Publish(subscriber.getInputStream());
+            JsonNode payload = readJson(accepted.payload());
+            assertEquals("$aws/things/phase7Mqtt5Thing/shadow/update/accepted", accepted.topic());
+            assertEquals("purple", payload.path("state").path("desired").path("color").asText());
+            assertEquals("mqtt5-token", payload.path("clientToken").asText());
+        }
+    }
+
+
+    @Test
+    void malformedShadowUpdateTopicPublishesRejectedResponse() throws Exception {
+        try (Socket subscriber = connectMqtt("phase7-rejected-sub")) {
+            subscribe(subscriber, "$aws/things/phase7Thing/shadow/update/rejected");
+
+            try (Socket publisher = connectMqtt("phase7-rejected-pub")) {
+                publish(publisher, "$aws/things/phase7Thing/shadow/update", "{".getBytes(StandardCharsets.UTF_8));
+            }
+
+            MqttPublish rejected = readPublish(subscriber.getInputStream());
+            JsonNode payload = readJson(rejected.payload());
+            assertEquals("$aws/things/phase7Thing/shadow/update/rejected", rejected.topic());
+            assertEquals("InvalidRequestException", payload.path("code").asText());
+            assertTrue(payload.path("message").asText().length() > 0);
+        }
+    }
+
+    @Test
+    void shadowGetAndDeleteTopicsPublishAcceptedResponses() throws Exception {
+        try (Socket subscriber = connectMqtt("phase7-get-delete-sub")) {
+            subscribe(subscriber, "$aws/things/phase7GetDelete/shadow/get/accepted");
+            subscribe(subscriber, "$aws/things/phase7GetDelete/shadow/delete/accepted");
+
+            try (Socket publisher = connectMqtt("phase7-get-delete-pub")) {
+                publish(publisher, "$aws/things/phase7GetDelete/shadow/update",
+                        json("{\"state\":{\"reported\":{\"online\":true}}}"));
+                publish(publisher, "$aws/things/phase7GetDelete/shadow/get", json("{\"clientToken\":\"get-token\"}"));
+                MqttPublish getAccepted = readPublish(subscriber.getInputStream());
+                JsonNode getPayload = readJson(getAccepted.payload());
+                assertEquals("$aws/things/phase7GetDelete/shadow/get/accepted", getAccepted.topic());
+                assertTrue(getPayload.path("state").path("reported").path("online").asBoolean());
+                assertEquals("get-token", getPayload.path("clientToken").asText());
+
+                publish(publisher, "$aws/things/phase7GetDelete/shadow/delete", json("{\"clientToken\":\"delete-token\"}"));
+                MqttPublish deleteAccepted = readPublish(subscriber.getInputStream());
+                JsonNode deletePayload = readJson(deleteAccepted.payload());
+                assertEquals("$aws/things/phase7GetDelete/shadow/delete/accepted", deleteAccepted.topic());
+                assertTrue(deletePayload.path("state").path("reported").path("online").asBoolean());
+                assertEquals("delete-token", deletePayload.path("clientToken").asText());
+            }
+        }
+    }
+
+    @Test
+    void shadowUpdatePublishesDocumentsAndDeltaResponses() throws Exception {
+        try (Socket subscriber = connectMqtt("phase7-docs-delta-sub")) {
+            subscribe(subscriber, "$aws/things/phase7Documents/shadow/update/documents");
+            subscribe(subscriber, "$aws/things/phase7Documents/shadow/update/delta");
+
+            try (Socket publisher = connectMqtt("phase7-docs-delta-pub")) {
+                publish(publisher, "$aws/things/phase7Documents/shadow/update",
+                        json("{\"state\":{\"reported\":{\"color\":\"red\"}}}"));
+                readPublish(subscriber.getInputStream());
+
+                publish(publisher, "$aws/things/phase7Documents/shadow/update",
+                        json("{\"state\":{\"desired\":{\"color\":\"blue\"}}}"));
+                MqttPublish documents = readPublish(subscriber.getInputStream());
+                MqttPublish delta = readPublish(subscriber.getInputStream());
+                if (documents.topic().endsWith("/delta")) {
+                    MqttPublish swap = documents;
+                    documents = delta;
+                    delta = swap;
+                }
+
+                JsonNode documentsPayload = readJson(documents.payload());
+                JsonNode deltaPayload = readJson(delta.payload());
+                assertEquals("$aws/things/phase7Documents/shadow/update/documents", documents.topic());
+                assertEquals("$aws/things/phase7Documents/shadow/update/delta", delta.topic());
+                assertEquals("red", documentsPayload.path("previous").path("state").path("reported").path("color").asText());
+                assertEquals("blue", documentsPayload.path("current").path("state").path("desired").path("color").asText());
+                assertEquals("blue", deltaPayload.path("state").path("color").asText());
+            }
+        }
     }
 
     private Socket connectMqtt(String clientId) throws IOException {
@@ -128,9 +243,39 @@ class IotMqttEnabledIntegrationTest {
         assertArrayEquals(new byte[] {(byte) 0x90, 0x03, 0x00, 0x01, 0x00}, suback);
     }
 
+    private void subscribeMqtt5(Socket socket, String topic) throws IOException {
+        ByteArrayOutputStream variable = new ByteArrayOutputStream();
+        variable.write(0x00);
+        variable.write(0x01);
+        variable.write(0x00);
+        writeUtf8(variable, topic);
+        variable.write(0x00);
+        socket.getOutputStream().write(packet(0x82, variable.toByteArray()));
+        byte[] suback = readPacket(socket.getInputStream());
+        assertEquals(0x90, suback[0] & 0xff);
+        int position = 1 + remainingLengthBytes(suback);
+        assertEquals(0x00, suback[position] & 0xff);
+        assertEquals(0x01, suback[position + 1] & 0xff);
+        position += 2;
+        int propertiesLengthBytes = variableLengthBytes(suback, position);
+        int propertiesLength = variableLength(suback, position);
+        position += propertiesLengthBytes + propertiesLength;
+        assertEquals(0x00, suback[position] & 0xff);
+    }
+
     private void publish(Socket socket, String topic, byte[] payload) throws IOException {
         ByteArrayOutputStream variable = new ByteArrayOutputStream();
         writeUtf8(variable, topic);
+        variable.write(payload);
+        socket.getOutputStream().write(packet(0x30, variable.toByteArray()));
+    }
+
+    private void publishMqtt5(Socket socket, String topic, byte[] payload) throws IOException {
+        ByteArrayOutputStream variable = new ByteArrayOutputStream();
+        writeUtf8(variable, topic);
+        variable.write(0x02);
+        variable.write(0x01);
+        variable.write(0x01);
         variable.write(payload);
         socket.getOutputStream().write(packet(0x30, variable.toByteArray()));
     }
@@ -145,6 +290,28 @@ class IotMqttEnabledIntegrationTest {
         String topic = new String(packet, position, topicLength, StandardCharsets.UTF_8);
         position += topicLength;
         return new MqttPublish(topic, Arrays.copyOfRange(packet, position, packet.length));
+    }
+
+    private MqttPublish readMqtt5Publish(InputStream input) throws IOException {
+        byte[] packet = readPacket(input);
+        assertEquals(0x30, packet[0] & 0xf0);
+        int position = 1 + remainingLengthBytes(packet);
+        int topicLength = ((packet[position] & 0xff) << 8) | (packet[position + 1] & 0xff);
+        position += 2;
+        String topic = new String(packet, position, topicLength, StandardCharsets.UTF_8);
+        position += topicLength;
+        int propertiesLengthBytes = variableLengthBytes(packet, position);
+        int propertiesLength = variableLength(packet, position);
+        position += propertiesLengthBytes + propertiesLength;
+        return new MqttPublish(topic, Arrays.copyOfRange(packet, position, packet.length));
+    }
+
+    private byte[] json(String value) {
+        return value.getBytes(StandardCharsets.UTF_8);
+    }
+
+    private JsonNode readJson(byte[] payload) throws IOException {
+        return OBJECT_MAPPER.readTree(payload);
     }
 
     private byte[] packet(int type, byte[] body) throws IOException {
@@ -189,6 +356,29 @@ class IotMqttEnabledIntegrationTest {
         int encoded;
         do {
             encoded = packet[1 + count] & 0xff;
+            count++;
+        } while ((encoded & 128) != 0);
+        return count;
+    }
+
+    private int variableLength(byte[] packet, int offset) {
+        int multiplier = 1;
+        int value = 0;
+        int position = offset;
+        int encoded;
+        do {
+            encoded = packet[position++] & 0xff;
+            value += (encoded & 127) * multiplier;
+            multiplier *= 128;
+        } while ((encoded & 128) != 0);
+        return value;
+    }
+
+    private int variableLengthBytes(byte[] packet, int offset) {
+        int count = 0;
+        int encoded;
+        do {
+            encoded = packet[offset + count] & 0xff;
             count++;
         } while ((encoded & 128) != 0);
         return count;
