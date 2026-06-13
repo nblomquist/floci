@@ -25,6 +25,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.UUID;
+import java.util.function.BiConsumer;
 import java.util.regex.Pattern;
 
 @ApplicationScoped
@@ -302,6 +303,30 @@ public class IotService {
         publishEventRecorder.record(topic, payload);
     }
 
+    void handleReservedMqttPublish(String topic, byte[] payload, BiConsumer<String, byte[]> publisher) {
+        ReservedShadowTopic shadowTopic = parseReservedShadowTopic(topic);
+        if (shadowTopic == null) {
+            return;
+        }
+
+        try {
+            JsonNode request = readJson(payload == null || payload.length == 0 ? "{}" : new String(payload, java.nio.charset.StandardCharsets.UTF_8));
+            String clientToken = request.path("clientToken").asText(null);
+            String region = config.defaultRegion();
+            switch (shadowTopic.operation()) {
+                case "update" -> publishShadowUpdate(shadowTopic, request, clientToken, region, publisher);
+                case "get" -> publishShadowGet(shadowTopic, clientToken, region, publisher);
+                case "delete" -> publishShadowDelete(shadowTopic, clientToken, region, publisher);
+                default -> publishRejected(shadowTopic.rejectedTopic(), "InvalidRequestException",
+                        "Unsupported shadow operation: " + shadowTopic.operation(), clientToken, publisher);
+            }
+        } catch (AwsException e) {
+            publishRejected(shadowTopic.rejectedTopic(), e.getErrorCode(), e.getMessage(), null, publisher);
+        } catch (Exception e) {
+            publishRejected(shadowTopic.rejectedTopic(), "InvalidRequestException", e.getMessage(), null, publisher);
+        }
+    }
+
     private void validateThingName(String thingName) {
         if (thingName == null || !THING_NAME_PATTERN.matcher(thingName).matches()) {
             throw new AwsException("InvalidRequestException", "Invalid thing name: " + thingName, 400);
@@ -328,6 +353,90 @@ public class IotService {
         } catch (Exception e) {
             throw new AwsException("InvalidRequestException", e.getMessage(), 400);
         }
+    }
+
+    private void publishShadowUpdate(ReservedShadowTopic topic, JsonNode request, String clientToken, String region,
+                                     BiConsumer<String, byte[]> publisher) {
+        JsonNode previous = shadowStore.get(shadowKey(region, topic.thingName(), null))
+                .map(IotShadow::getDocument)
+                .map(this::readJson)
+                .orElse(null);
+        JsonNode current = updateThingShadow(topic.thingName(), null, request, region);
+        ObjectNode accepted = withClientToken(current.deepCopy(), clientToken);
+        publishJson(topic.acceptedTopic(), accepted, publisher);
+
+        ObjectNode documents = objectMapper.createObjectNode();
+        if (previous != null) {
+            documents.set("previous", previous);
+        }
+        documents.set("current", current);
+        documents.put("timestamp", Instant.now().getEpochSecond());
+        publishJson(topic.documentsTopic(), documents, publisher);
+
+        ObjectNode deltaState = objectMapper.createObjectNode();
+        JsonNode desired = current.path("state").path("desired");
+        JsonNode reported = current.path("state").path("reported");
+        if (desired.isObject()) {
+            desired.fields().forEachRemaining(entry -> {
+                JsonNode reportedValue = reported.path(entry.getKey());
+                if (reportedValue.isMissingNode() || !reportedValue.equals(entry.getValue())) {
+                    deltaState.set(entry.getKey(), entry.getValue());
+                }
+            });
+        }
+        if (!deltaState.isEmpty()) {
+            ObjectNode delta = objectMapper.createObjectNode();
+            delta.set("state", deltaState);
+            delta.put("version", current.path("version").asLong());
+            delta.put("timestamp", Instant.now().getEpochSecond());
+            publishJson(topic.deltaTopic(), delta, publisher);
+        }
+    }
+
+    private void publishShadowGet(ReservedShadowTopic topic, String clientToken, String region, BiConsumer<String, byte[]> publisher) {
+        ObjectNode accepted = withClientToken(getThingShadow(topic.thingName(), null, region).deepCopy(), clientToken);
+        publishJson(topic.acceptedTopic(), accepted, publisher);
+    }
+
+    private void publishShadowDelete(ReservedShadowTopic topic, String clientToken, String region, BiConsumer<String, byte[]> publisher) {
+        ObjectNode accepted = withClientToken(deleteThingShadow(topic.thingName(), null, region).deepCopy(), clientToken);
+        publishJson(topic.acceptedTopic(), accepted, publisher);
+    }
+
+    private ObjectNode withClientToken(JsonNode document, String clientToken) {
+        ObjectNode node = document instanceof ObjectNode objectNode ? objectNode : objectMapper.createObjectNode();
+        if (clientToken != null && !clientToken.isBlank()) {
+            node.put("clientToken", clientToken);
+        }
+        return node;
+    }
+
+    private void publishRejected(String topic, String code, String message, String clientToken, BiConsumer<String, byte[]> publisher) {
+        ObjectNode rejected = objectMapper.createObjectNode();
+        rejected.put("code", code);
+        rejected.put("message", message == null ? code : message);
+        rejected.put("timestamp", Instant.now().getEpochSecond());
+        if (clientToken != null && !clientToken.isBlank()) {
+            rejected.put("clientToken", clientToken);
+        }
+        publishJson(topic, rejected, publisher);
+    }
+
+    private void publishJson(String topic, JsonNode payload, BiConsumer<String, byte[]> publisher) {
+        try {
+            publisher.accept(topic, objectMapper.writeValueAsBytes(payload));
+        } catch (Exception e) {
+            throw new AwsException("InvalidRequestException", e.getMessage(), 400);
+        }
+    }
+
+    private ReservedShadowTopic parseReservedShadowTopic(String topic) {
+        String[] parts = topic.split("/");
+        if (parts.length != 5 || !"$aws".equals(parts[0]) || !"things".equals(parts[1])
+                || !"shadow".equals(parts[3])) {
+            return null;
+        }
+        return new ReservedShadowTopic(parts[2], parts[4]);
     }
 
     private void mergeObject(ObjectNode parent, String field, JsonNode patch) {
@@ -372,5 +481,27 @@ public class IotService {
             throw new AwsException("InvalidRequestException", "Invalid resource ARN: " + resourceArn, 400);
         }
         return parts;
+    }
+
+    private record ReservedShadowTopic(String thingName, String operation) {
+        private String baseTopic() {
+            return "$aws/things/" + thingName + "/shadow/" + operation;
+        }
+
+        private String acceptedTopic() {
+            return baseTopic() + "/accepted";
+        }
+
+        private String rejectedTopic() {
+            return baseTopic() + "/rejected";
+        }
+
+        private String documentsTopic() {
+            return "$aws/things/" + thingName + "/shadow/update/documents";
+        }
+
+        private String deltaTopic() {
+            return "$aws/things/" + thingName + "/shadow/update/delta";
+        }
     }
 }
