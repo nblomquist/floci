@@ -267,6 +267,13 @@ class IotTest {
         }
     }
 
+    @Test
+    void mqtt5Connect() throws Exception {
+        try (Socket client = mqtt5Connect("java-iot-mqtt5")) {
+            assertThat(client.isConnected()).isTrue();
+        }
+    }
+
     private Socket mqttConnect(String clientId) throws IOException {
         Socket socket = new Socket();
         socket.connect(new InetSocketAddress("floci", 1883), 5_000);
@@ -281,6 +288,34 @@ class IotTest {
         socket.getOutputStream().write(mqttPacket(0x10, body.toByteArray()));
         assertThat(mqttReadPacket(socket.getInputStream())).containsExactly(0x20, 0x02, 0x00, 0x00);
         return socket;
+    }
+
+    private Socket mqtt5Connect(String clientId) throws IOException {
+        Socket socket = new Socket();
+        socket.connect(new InetSocketAddress("floci", 1883), 5_000);
+        socket.setSoTimeout(5_000);
+        ByteArrayOutputStream body = new ByteArrayOutputStream();
+        mqttUtf8(body, "MQTT");
+        body.write(0x05);
+        body.write(0x02);
+        body.write(0x00);
+        body.write(0x3c);
+        body.write(0x00);
+        mqttUtf8(body, clientId);
+        socket.getOutputStream().write(mqttPacket(0x10, body.toByteArray()));
+        mqttAssertV5Connack(mqttReadPacket(socket.getInputStream()));
+        return socket;
+    }
+
+    private void mqttAssertV5Connack(byte[] packet) {
+        assertThat(packet[0] & 0xff).isEqualTo(0x20);
+        int index = 1;
+        while ((packet[index] & 0x80) != 0) {
+            index++;
+        }
+        index++;
+        assertThat(packet[index] & 0xff).isEqualTo(0x00);
+        assertThat(packet[index + 1] & 0xff).isEqualTo(0x00);
     }
 
     private void mqttSubscribe(Socket socket, String topic) throws IOException {

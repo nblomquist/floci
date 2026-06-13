@@ -244,6 +244,11 @@ func TestIoT(t *testing.T) {
 		assert.Equal(t, topic, receivedTopic)
 		assert.Equal(t, payload, receivedPayload)
 	})
+
+	t.Run("Mqtt5Connect", func(t *testing.T) {
+		client := mqtt5Connect(t, "go-iot-mqtt5")
+		client.Close()
+	})
 }
 
 func tagsByKey(tags []iottypes.Tag) map[string]string {
@@ -266,6 +271,32 @@ func mqttConnect(t *testing.T, clientID string) net.Conn {
 	packet := mqttReadPacket(t, conn)
 	require.Equal(t, []byte{0x20, 0x02, 0x00, 0x00}, packet)
 	return conn
+}
+
+func mqtt5Connect(t *testing.T, clientID string) net.Conn {
+	t.Helper()
+	conn, err := net.DialTimeout("tcp", "floci:1883", 5*time.Second)
+	require.NoError(t, err)
+	require.NoError(t, conn.SetDeadline(time.Now().Add(5*time.Second)))
+	body := append(mqttUTF8("MQTT"), []byte{5, 2, 0, 60, 0}...)
+	body = append(body, mqttUTF8(clientID)...)
+	_, err = conn.Write(append([]byte{0x10}, append(mqttRemainingLength(len(body)), body...)...))
+	require.NoError(t, err)
+	packet := mqttReadPacket(t, conn)
+	mqttAssertV5Connack(t, packet)
+	return conn
+}
+
+func mqttAssertV5Connack(t *testing.T, packet []byte) {
+	t.Helper()
+	require.Equal(t, byte(0x20), packet[0])
+	index := 1
+	for packet[index]&0x80 != 0 {
+		index++
+	}
+	index++
+	require.Equal(t, byte(0x00), packet[index])
+	require.Equal(t, byte(0x00), packet[index+1])
 }
 
 func mqttSubscribe(t *testing.T, conn net.Conn, topic string) {
