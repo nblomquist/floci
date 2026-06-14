@@ -488,6 +488,266 @@ class IotIntegrationTest {
             .statusCode(200);
     }
 
+    @Test
+    @Order(17)
+    void certificateDeleteCsrStatusAndTagsMatchMvpLifecycle() {
+        String activeArn = given()
+            .queryParam("setAsActive", true)
+        .when()
+            .post("/keys-and-certificate")
+        .then()
+            .statusCode(200)
+            .extract()
+            .path("certificateArn");
+        String activeId = activeArn.substring(activeArn.lastIndexOf('/') + 1);
+
+        given()
+        .when()
+            .delete("/certificates/" + activeId)
+        .then()
+            .statusCode(400)
+            .body("__type", equalTo("InvalidRequestException"));
+
+        given()
+            .contentType("application/json")
+            .body("{\"newStatus\":\"PENDING_TRANSFER\"}")
+        .when()
+            .put("/certificates/" + activeId)
+        .then()
+            .statusCode(400)
+            .body("__type", equalTo("InvalidRequestException"));
+
+        given()
+            .contentType("application/json")
+            .body("{\"newStatus\":\"INACTIVE\"}")
+        .when()
+            .put("/certificates/" + activeId)
+        .then()
+            .statusCode(200);
+
+        given()
+            .contentType("application/json")
+            .body("""
+                {
+                  "resourceArn": "%s",
+                  "tags": [{"Key": "env", "Value": "cert"}]
+                }
+                """.formatted(activeArn))
+        .when()
+            .post("/tags")
+        .then()
+            .statusCode(200);
+
+        given()
+            .queryParam("resourceArn", activeArn)
+        .when()
+            .get("/tags")
+        .then()
+            .statusCode(200)
+            .body("tags.Key", hasItem("env"))
+            .body("tags.Value", hasItem("cert"));
+
+        given()
+        .when()
+            .delete("/certificates/" + activeId)
+        .then()
+            .statusCode(200);
+
+        given()
+        .when()
+            .get("/certificates/" + activeId)
+        .then()
+            .statusCode(404)
+            .body("__type", equalTo("ResourceNotFoundException"));
+
+        String csrArn = given()
+            .contentType("application/json")
+            .queryParam("setAsActive", false)
+            .body("{\"certificateSigningRequest\":\"-----BEGIN CERTIFICATE REQUEST-----\\nfloci\\n-----END CERTIFICATE REQUEST-----\"}")
+        .when()
+            .post("/certificates")
+        .then()
+            .statusCode(200)
+            .body("certificatePem", containsString("BEGIN CERTIFICATE"))
+            .extract()
+            .path("certificateArn");
+        String csrId = csrArn.substring(csrArn.lastIndexOf('/') + 1);
+
+        given()
+        .when()
+            .delete("/certificates/" + csrId)
+        .then()
+            .statusCode(200);
+    }
+
+    @Test
+    @Order(18)
+    void certificateDeleteRejectsThingPrincipalAttachment() {
+        String certificateArn = given()
+            .queryParam("setAsActive", false)
+        .when()
+            .post("/keys-and-certificate")
+        .then()
+            .statusCode(200)
+            .extract()
+            .path("certificateArn");
+        String certificateId = certificateArn.substring(certificateArn.lastIndexOf('/') + 1);
+
+        createThingAndReturnArn("mvp1-attached-cert-thing");
+        given()
+            .queryParam("principal", certificateArn)
+        .when()
+            .put("/things/mvp1-attached-cert-thing/principals")
+        .then()
+            .statusCode(200);
+
+        given()
+        .when()
+            .delete("/certificates/" + certificateId)
+        .then()
+            .statusCode(400)
+            .body("__type", equalTo("InvalidRequestException"));
+
+        given()
+            .queryParam("principal", certificateArn)
+        .when()
+            .get("/principals/things")
+        .then()
+            .statusCode(200)
+            .body("things", hasItem("mvp1-attached-cert-thing"));
+    }
+
+    @Test
+    @Order(19)
+    void policyCrudVersionsAttachmentReadsAndTagsMatchMvpLifecycle() {
+        given()
+            .contentType("application/json")
+            .body("{\"policyDocument\":\"{\\\"Version\\\":\\\"2012-10-17\\\",\\\"Statement\\\":[]}\"}")
+        .when()
+            .post("/policies/phase-four-policy")
+        .then()
+            .statusCode(409)
+            .body("__type", equalTo("ResourceAlreadyExistsException"));
+
+        String policyArn = given()
+            .contentType("application/json")
+            .body("{\"policyDocument\":\"{\\\"Version\\\":\\\"2012-10-17\\\",\\\"Statement\\\":[]}\"}")
+        .when()
+            .post("/policies/mvp1-policy")
+        .then()
+            .statusCode(200)
+            .extract()
+            .path("policyArn");
+
+        given()
+            .contentType("application/json")
+            .body("""
+                {
+                  "resourceArn": "%s",
+                  "tags": [{"Key": "env", "Value": "policy"}]
+                }
+                """.formatted(policyArn))
+        .when()
+            .post("/tags")
+        .then()
+            .statusCode(200);
+
+        String versionId = given()
+            .contentType("application/json")
+            .queryParam("setAsDefault", true)
+            .body("{\"policyDocument\":\"{\\\"Version\\\":\\\"2012-10-17\\\",\\\"Statement\\\":[{\\\"Effect\\\":\\\"Allow\\\"}]}\"}")
+        .when()
+            .post("/policies/mvp1-policy/version")
+        .then()
+            .statusCode(200)
+            .body("isDefaultVersion", equalTo(true))
+            .extract()
+            .path("policyVersionId");
+
+        given()
+        .when()
+            .get("/policies/mvp1-policy/version")
+        .then()
+            .statusCode(200)
+            .body("policyVersions.versionId", hasItem(versionId));
+
+        given()
+        .when()
+            .get("/policies/mvp1-policy/version/" + versionId)
+        .then()
+            .statusCode(200)
+            .body("policyDocument", containsString("Allow"));
+
+        given()
+        .when()
+            .patch("/policies/mvp1-policy/version/1")
+        .then()
+            .statusCode(200);
+
+        given()
+        .when()
+            .delete("/policies/mvp1-policy/version/" + versionId)
+        .then()
+            .statusCode(200);
+
+        String certificateArn = given()
+            .queryParam("setAsActive", false)
+        .when()
+            .post("/keys-and-certificate")
+        .then()
+            .statusCode(200)
+            .extract()
+            .path("certificateArn");
+
+        given()
+            .queryParam("target", certificateArn)
+        .when()
+            .put("/target-policies/mvp1-policy")
+        .then()
+            .statusCode(200);
+
+        given()
+        .when()
+            .get("/attached-policies/" + certificateArn)
+        .then()
+            .statusCode(200)
+            .body("policies.policyName", hasItem("mvp1-policy"));
+
+        given()
+        .when()
+            .get("/policy-targets/mvp1-policy")
+        .then()
+            .statusCode(200)
+            .body("targets", hasItem(certificateArn));
+
+        given()
+        .when()
+            .delete("/policies/mvp1-policy")
+        .then()
+            .statusCode(400)
+            .body("__type", equalTo("InvalidRequestException"));
+
+        given()
+            .queryParam("target", certificateArn)
+        .when()
+            .post("/target-policies/mvp1-policy")
+        .then()
+            .statusCode(200);
+
+        given()
+        .when()
+            .delete("/policies/mvp1-policy")
+        .then()
+            .statusCode(200);
+
+        given()
+        .when()
+            .get("/policies/mvp1-policy")
+        .then()
+            .statusCode(404)
+            .body("__type", equalTo("ResourceNotFoundException"));
+    }
+
     private String createThingAndReturnArn(String thingName) {
         return given()
             .contentType("application/json")

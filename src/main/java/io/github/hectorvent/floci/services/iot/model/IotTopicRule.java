@@ -1,6 +1,8 @@
 package io.github.hectorvent.floci.services.iot.model;
 
 import java.time.Instant;
+import java.util.Map;
+import java.util.TreeMap;
 
 public class IotTopicRule {
     private String ruleName;
@@ -10,6 +12,7 @@ public class IotTopicRule {
     private boolean ruleDisabled;
     private String actionsJson = "[]";
     private Instant createdAt;
+    private Map<String, String> tags = new TreeMap<>();
 
     public String getRuleName() {
         return ruleName;
@@ -65,5 +68,13 @@ public class IotTopicRule {
 
     public void setCreatedAt(Instant createdAt) {
         this.createdAt = createdAt;
+    }
+
+    public Map<String, String> getTags() {
+        return tags == null ? Map.of() : tags;
+    }
+
+    public void setTags(Map<String, String> tags) {
+        this.tags = tags == null ? new TreeMap<>() : new TreeMap<>(tags);
     }
 }
