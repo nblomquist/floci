@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.hasItem;
+import static org.hamcrest.Matchers.nullValue;
 
 @QuarkusTest
 class IotDataIntegrationTest {
@@ -95,5 +96,113 @@ class IotDataIntegrationTest {
             .delete("/things/phase-five-named/shadow")
         .then()
             .statusCode(200);
+    }
+
+    @Test
+    void retainedMessagesRoundTripAndDeleteWithEmptyRetainedPublish() {
+        given()
+            .contentType("text/plain")
+            .queryParam("retain", true)
+            .queryParam("qos", 1)
+            .body("retained-payload")
+        .when()
+            .post("/topics/devices/mvp1/retained")
+        .then()
+            .statusCode(200);
+
+        given()
+        .when()
+            .get("/retainedMessage/devices/mvp1/retained")
+        .then()
+            .statusCode(200)
+            .body("topic", equalTo("devices/mvp1/retained"))
+            .body("payload", equalTo("cmV0YWluZWQtcGF5bG9hZA=="))
+            .body("qos", equalTo(1));
+
+        given()
+            .contentType("text/plain")
+            .queryParam("retain", true)
+            .body("other")
+        .when()
+            .post("/topics/devices/mvp1/retained-other")
+        .then()
+            .statusCode(200);
+
+        String nextToken = given()
+            .queryParam("maxResults", 1)
+        .when()
+            .get("/retainedMessage")
+        .then()
+            .statusCode(200)
+            .body("retainedTopics.size()", equalTo(1))
+            .extract()
+            .path("nextToken");
+
+        given()
+            .queryParam("maxResults", 1)
+            .queryParam("nextToken", nextToken)
+        .when()
+            .get("/retainedMessage")
+        .then()
+            .statusCode(200)
+            .body("retainedTopics.size()", equalTo(1));
+
+        given()
+            .contentType("application/octet-stream")
+            .queryParam("retain", true)
+            .body(new byte[0])
+        .when()
+            .post("/topics/devices/mvp1/retained")
+        .then()
+            .statusCode(200);
+
+        given()
+        .when()
+            .get("/retainedMessage/devices/mvp1/retained")
+        .then()
+            .statusCode(404)
+            .body("__type", equalTo("ResourceNotFoundException"));
+    }
+
+    @Test
+    void shadowNullDeletesPropertiesAndVersionConflicts() {
+        given()
+            .contentType("application/json")
+            .body("{\"state\":{\"desired\":{\"color\":\"blue\",\"mode\":\"auto\"}}}")
+        .when()
+            .post("/things/mvp1-shadow/shadow")
+        .then()
+            .statusCode(200)
+            .body("version", equalTo(1));
+
+        given()
+            .contentType("application/json")
+            .body("{\"version\":1,\"state\":{\"desired\":{\"color\":null}}}")
+        .when()
+            .post("/things/mvp1-shadow/shadow")
+        .then()
+            .statusCode(200)
+            .body("state.desired.color", nullValue())
+            .body("state.desired.mode", equalTo("auto"))
+            .body("version", equalTo(2));
+
+        given()
+            .contentType("application/json")
+            .body("{\"version\":1,\"state\":{\"desired\":{\"mode\":\"manual\"}}}")
+        .when()
+            .post("/things/mvp1-shadow/shadow")
+        .then()
+            .statusCode(409)
+            .body("__type", equalTo("VersionConflictException"));
+
+        given()
+            .contentType("application/json")
+            .body("{\"version\":2,\"state\":{\"desired\":null}}")
+        .when()
+            .post("/things/mvp1-shadow/shadow")
+        .then()
+            .statusCode(200)
+            .body("state.desired", nullValue())
+            .body("version", equalTo(3));
     }
 }

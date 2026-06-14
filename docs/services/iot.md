@@ -2,6 +2,27 @@
 
 Floci's IoT service emulates the AWS IoT Core control plane, IoT Data shadow APIs, and MQTT data-plane behavior used by local device and SDK tests.
 
+## MVP 1 Coverage
+
+Status: complete for the local emulator slice.
+
+Supported MVP 1 behavior:
+
+- Thing CRUD with idempotent identical `CreateThing`, duplicate-conflict semantics, `UpdateThing.expectedVersion`, and list pagination.
+- Certificate basics: `CreateKeysAndCertificate`, `CreateCertificateFromCsr`, `DescribeCertificate`, `ListCertificates`, `UpdateCertificate`, and `DeleteCertificate` with active/attached delete constraints.
+- Policy basics: `CreatePolicy`, `GetPolicy`, `ListPolicies`, `DeletePolicy`, policy version lifecycle, `AttachPolicy`, `DetachPolicy`, `ListAttachedPolicies`, and `ListTargetsForPolicy`.
+- Thing principal basics: `AttachThingPrincipal`, `DetachThingPrincipal`, `ListThingPrincipals`, and `ListPrincipalThings`.
+- Tags for things, certificates, policies, and topic rules.
+- IoT Data retained messages: retained `Publish`, `GetRetainedMessage`, and paginated `ListRetainedMessages`.
+- Shadow null-delete and version-conflict behavior for HTTP and shared service paths.
+- Topic rule duplicate/delete/replace semantics, plus `republish`, `sqs`, and `sns` action dispatch.
+
+Current MVP 1 limitations:
+
+- Certificate CSR handling creates emulator-local certificates; it does not perform real CA signing.
+- MQTT auth remains permissive; certificate and policy resources are modeled for provisioning compatibility, not enforced as broker authorization yet.
+- Rules support basic topic filter extraction and action dispatch only; SQL projection, WHERE evaluation, substitutions, and error actions remain follow-up scope.
+
 ## Phase 7 MQTT Broker Decision
 
 Status: complete.

@@ -211,6 +211,176 @@ class IotTopicRuleIntegrationTest {
             .body(containsString("sqs-rule-payload"));
     }
 
+    @Test
+    void matchingTopicRulePublishesPayloadToSns() {
+        String queueUrl = given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateQueue")
+            .formParam("QueueName", "mvp1-iot-sns-rule-queue")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .extract().xmlPath().getString("CreateQueueResponse.CreateQueueResult.QueueUrl");
+
+        String topicArn = given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateTopic")
+            .formParam("Name", "mvp1-iot-sns-rule-topic")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .extract().xmlPath().getString("CreateTopicResponse.CreateTopicResult.TopicArn");
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "Subscribe")
+            .formParam("TopicArn", topicArn)
+            .formParam("Protocol", "sqs")
+            .formParam("Endpoint", queueUrl)
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200);
+
+        given()
+            .contentType("application/json")
+            .body("""
+                {
+                  "topicRulePayload": {
+                    "sql": "SELECT * FROM 'devices/mvp1/sns'",
+                    "actions": [
+                      {
+                        "sns": {
+                          "roleArn": "arn:aws:iam::000000000000:role/iot-rule-role",
+                          "targetArn": "%s"
+                        }
+                      }
+                    ]
+                  }
+                }
+                """.formatted(topicArn))
+        .when()
+            .put("/rules/mvp1SnsRule")
+        .then()
+            .statusCode(200);
+
+        given()
+            .contentType("text/plain")
+            .body("sns-rule-payload")
+        .when()
+            .post("/topics/devices/mvp1/sns")
+        .then()
+            .statusCode(200);
+
+        given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "ReceiveMessage")
+            .formParam("QueueUrl", queueUrl)
+            .formParam("MaxNumberOfMessages", "1")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString("sns-rule-payload"));
+    }
+
+    @Test
+    void topicRuleConflictReplaceDeleteAndTagsMatchMvpLifecycle() {
+        given()
+            .contentType("application/json")
+            .body("""
+                {
+                  "topicRulePayload": {
+                    "sql": "SELECT * FROM 'devices/mvp1/original'",
+                    "description": "original",
+                    "actions": []
+                  }
+                }
+                """)
+        .when()
+            .put("/rules/mvp1Rule")
+        .then()
+            .statusCode(200)
+            .body("ruleArn", equalTo("arn:aws:iot:us-east-1:000000000000:rule/mvp1Rule"));
+
+        given()
+            .contentType("application/json")
+            .body("""
+                {
+                  "topicRulePayload": {
+                    "sql": "SELECT * FROM 'devices/mvp1/original'",
+                    "actions": []
+                  }
+                }
+                """)
+        .when()
+            .put("/rules/mvp1Rule")
+        .then()
+            .statusCode(409)
+            .body("__type", equalTo("ResourceAlreadyExistsException"));
+
+        given()
+            .contentType("application/json")
+            .body("""
+                {
+                  "resourceArn": "arn:aws:iot:us-east-1:000000000000:rule/mvp1Rule",
+                  "tags": [{"Key": "env", "Value": "rule"}]
+                }
+                """)
+        .when()
+            .post("/tags")
+        .then()
+            .statusCode(200);
+
+        given()
+            .queryParam("resourceArn", "arn:aws:iot:us-east-1:000000000000:rule/mvp1Rule")
+        .when()
+            .get("/tags")
+        .then()
+            .statusCode(200)
+            .body("tags.Key", hasItem("env"))
+            .body("tags.Value", hasItem("rule"));
+
+        given()
+            .contentType("application/json")
+            .body("""
+                {
+                  "topicRulePayload": {
+                    "sql": "SELECT * FROM 'devices/mvp1/replaced'",
+                    "description": "replaced",
+                    "actions": []
+                  }
+                }
+                """)
+        .when()
+            .patch("/rules/mvp1Rule")
+        .then()
+            .statusCode(200);
+
+        given()
+        .when()
+            .get("/rules/mvp1Rule")
+        .then()
+            .statusCode(200)
+            .body("rule.sql", equalTo("SELECT * FROM 'devices/mvp1/replaced'"))
+            .body("rule.description", equalTo("replaced"));
+
+        given()
+        .when()
+            .delete("/rules/mvp1Rule")
+        .then()
+            .statusCode(200);
+
+        given()
+        .when()
+            .delete("/rules/mvp1Rule")
+        .then()
+            .statusCode(404)
+            .body("__type", equalTo("ResourceNotFoundException"));
+    }
+
     private void awaitPublishedEvent(String topic, byte[] payload) throws InterruptedException {
         Instant deadline = Instant.now().plus(Duration.ofSeconds(2));
         while (Instant.now().isBefore(deadline)) {

@@ -136,7 +136,7 @@ public class IotController {
     @Path("/keys-and-certificate")
     @Consumes(MediaType.WILDCARD)
     public Response createKeysAndCertificate(@Context HttpHeaders headers,
-                                             @QueryParam("setAsActive") boolean setAsActive) {
+                                              @QueryParam("setAsActive") boolean setAsActive) {
         IotCertificate certificate = iotService.createKeysAndCertificate(setAsActive, regionResolver.resolveRegion(headers));
         ObjectNode response = objectMapper.createObjectNode();
         response.put("certificateArn", certificate.getCertificateArn());
@@ -146,6 +146,25 @@ public class IotController {
         keyPair.put("PublicKey", certificate.getPublicKey());
         keyPair.put("PrivateKey", certificate.getPrivateKey());
         return Response.ok(response).build();
+    }
+
+    @POST
+    @Path("/certificates")
+    public Response createCertificateFromCsr(@Context HttpHeaders headers,
+                                             @QueryParam("setAsActive") boolean setAsActive,
+                                             String body) {
+        try {
+            JsonNode request = objectMapper.readTree(body == null || body.isBlank() ? "{}" : body);
+            IotCertificate certificate = iotService.createCertificateFromCsr(
+                    request.path("certificateSigningRequest").asText(null), setAsActive, regionResolver.resolveRegion(headers));
+            ObjectNode response = objectMapper.createObjectNode();
+            response.put("certificateArn", certificate.getCertificateArn());
+            response.put("certificateId", certificate.getCertificateId());
+            response.put("certificatePem", certificate.getCertificatePem());
+            return Response.ok(response).build();
+        } catch (JsonProcessingException e) {
+            throw new AwsException("InvalidRequestException", e.getMessage(), 400);
+        }
     }
 
     @GET
@@ -176,7 +195,7 @@ public class IotController {
     @PUT
     @Path("/certificates/{certificateId}")
     public Response updateCertificate(@Context HttpHeaders headers,
-                                      @PathParam("certificateId") String certificateId,
+                                       @PathParam("certificateId") String certificateId,
                                       @QueryParam("newStatus") String newStatus,
                                       String body) {
         try {
@@ -189,6 +208,15 @@ public class IotController {
         } catch (JsonProcessingException e) {
             throw new AwsException("InvalidRequestException", e.getMessage(), 400);
         }
+    }
+
+    @DELETE
+    @Path("/certificates/{certificateId}")
+    @Consumes(MediaType.WILDCARD)
+    public Response deleteCertificate(@Context HttpHeaders headers,
+                                      @PathParam("certificateId") String certificateId) {
+        iotService.deleteCertificate(certificateId, regionResolver.resolveRegion(headers));
+        return Response.ok(objectMapper.createObjectNode()).build();
     }
 
     @POST
@@ -225,6 +253,77 @@ public class IotController {
         return Response.ok(response).build();
     }
 
+    @DELETE
+    @Path("/policies/{policyName}")
+    @Consumes(MediaType.WILDCARD)
+    public Response deletePolicy(@Context HttpHeaders headers,
+                                 @PathParam("policyName") String policyName) {
+        iotService.deletePolicy(policyName, regionResolver.resolveRegion(headers));
+        return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
+    @POST
+    @Path("/policies/{policyName}/version")
+    public Response createPolicyVersion(@Context HttpHeaders headers,
+                                        @PathParam("policyName") String policyName,
+                                        @QueryParam("setAsDefault") boolean setAsDefault,
+                                        String body) {
+        try {
+            JsonNode request = objectMapper.readTree(body == null || body.isBlank() ? "{}" : body);
+            IotPolicy policy = iotService.getPolicy(policyName, regionResolver.resolveRegion(headers));
+            IotPolicy.PolicyVersion version = iotService.createPolicyVersion(policyName,
+                    request.path("policyDocument").asText(), setAsDefault, regionResolver.resolveRegion(headers));
+            return Response.ok(buildPolicyVersionResponse(policy, version, setAsDefault)).build();
+        } catch (JsonProcessingException e) {
+            throw new AwsException("InvalidRequestException", e.getMessage(), 400);
+        }
+    }
+
+    @GET
+    @Path("/policies/{policyName}/version")
+    public Response listPolicyVersions(@Context HttpHeaders headers,
+                                       @PathParam("policyName") String policyName) {
+        String region = regionResolver.resolveRegion(headers);
+        IotPolicy policy = iotService.getPolicy(policyName, region);
+        ObjectNode response = objectMapper.createObjectNode();
+        ArrayNode versions = response.putArray("policyVersions");
+        for (IotPolicy.PolicyVersion version : iotService.listPolicyVersions(policyName, region)) {
+            versions.add(buildPolicyVersionSummary(policy, version));
+        }
+        return Response.ok(response).build();
+    }
+
+    @GET
+    @Path("/policies/{policyName}/version/{policyVersionId}")
+    public Response getPolicyVersion(@Context HttpHeaders headers,
+                                     @PathParam("policyName") String policyName,
+                                     @PathParam("policyVersionId") String policyVersionId) {
+        String region = regionResolver.resolveRegion(headers);
+        IotPolicy policy = iotService.getPolicy(policyName, region);
+        IotPolicy.PolicyVersion version = iotService.getPolicyVersion(policyName, policyVersionId, region);
+        return Response.ok(buildPolicyVersionResponse(policy, version, version.getVersionId().equals(policy.getDefaultVersionId()))).build();
+    }
+
+    @PATCH
+    @Path("/policies/{policyName}/version/{policyVersionId}")
+    @Consumes(MediaType.WILDCARD)
+    public Response setDefaultPolicyVersion(@Context HttpHeaders headers,
+                                            @PathParam("policyName") String policyName,
+                                            @PathParam("policyVersionId") String policyVersionId) {
+        iotService.setDefaultPolicyVersion(policyName, policyVersionId, regionResolver.resolveRegion(headers));
+        return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
+    @DELETE
+    @Path("/policies/{policyName}/version/{policyVersionId}")
+    @Consumes(MediaType.WILDCARD)
+    public Response deletePolicyVersion(@Context HttpHeaders headers,
+                                        @PathParam("policyName") String policyName,
+                                        @PathParam("policyVersionId") String policyVersionId) {
+        iotService.deletePolicyVersion(policyName, policyVersionId, regionResolver.resolveRegion(headers));
+        return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
     @PUT
     @Path("/target-policies/{policyName}")
     @Consumes(MediaType.WILDCARD)
@@ -245,6 +344,54 @@ public class IotController {
                                  String body) {
         iotService.detachPolicy(policyName, parseTarget(target, body), regionResolver.resolveRegion(headers));
         return Response.ok(objectMapper.createObjectNode()).build();
+    }
+
+    @GET
+    @Path("/attached-policies/{target: .+}")
+    public Response listAttachedPolicies(@Context HttpHeaders headers,
+                                         @PathParam("target") String target) {
+        return listAttachedPoliciesResponse(headers, target);
+    }
+
+    @POST
+    @Path("/attached-policies/{target: .+}")
+    @Consumes(MediaType.WILDCARD)
+    public Response listAttachedPoliciesPost(@Context HttpHeaders headers,
+                                             @PathParam("target") String target) {
+        return listAttachedPoliciesResponse(headers, target);
+    }
+
+    private Response listAttachedPoliciesResponse(HttpHeaders headers, String target) {
+        ObjectNode response = objectMapper.createObjectNode();
+        ArrayNode policies = response.putArray("policies");
+        for (IotPolicy policy : iotService.listAttachedPolicies(target, regionResolver.resolveRegion(headers))) {
+            ObjectNode item = policies.addObject();
+            item.put("policyName", policy.getPolicyName());
+            item.put("policyArn", policy.getPolicyArn());
+        }
+        return Response.ok(response).build();
+    }
+
+    @GET
+    @Path("/policy-targets/{policyName}")
+    public Response listTargetsForPolicy(@Context HttpHeaders headers,
+                                         @PathParam("policyName") String policyName) {
+        return listTargetsForPolicyResponse(headers, policyName);
+    }
+
+    @POST
+    @Path("/policy-targets/{policyName}")
+    @Consumes(MediaType.WILDCARD)
+    public Response listTargetsForPolicyPost(@Context HttpHeaders headers,
+                                             @PathParam("policyName") String policyName) {
+        return listTargetsForPolicyResponse(headers, policyName);
+    }
+
+    private Response listTargetsForPolicyResponse(HttpHeaders headers, String policyName) {
+        ObjectNode response = objectMapper.createObjectNode();
+        ArrayNode targets = response.putArray("targets");
+        iotService.listTargetsForPolicy(policyName, regionResolver.resolveRegion(headers)).forEach(targets::add);
+        return Response.ok(response).build();
     }
 
     @PUT
@@ -279,6 +426,17 @@ public class IotController {
         return Response.ok(response).build();
     }
 
+    @GET
+    @Path("/principals/things")
+    public Response listPrincipalThings(@Context HttpHeaders headers,
+                                        @HeaderParam("x-amzn-principal") String principalHeader,
+                                        @QueryParam("principal") String principal) {
+        ObjectNode response = objectMapper.createObjectNode();
+        ArrayNode things = response.putArray("things");
+        iotService.listPrincipalThings(principalHeader != null ? principalHeader : principal, regionResolver.resolveRegion(headers)).forEach(things::add);
+        return Response.ok(response).build();
+    }
+
     @PUT
     @Path("/rules/{ruleName}")
     public Response createTopicRule(@Context HttpHeaders headers,
@@ -293,6 +451,24 @@ public class IotController {
                                         @PathParam("ruleName") String ruleName,
                                         String body) {
         return createTopicRuleResponse(headers, ruleName, body);
+    }
+
+    @PATCH
+    @Path("/rules/{ruleName}")
+    public Response replaceTopicRule(@Context HttpHeaders headers,
+                                     @PathParam("ruleName") String ruleName,
+                                     String body) {
+        try {
+            JsonNode request = objectMapper.readTree(body == null || body.isBlank() ? "{}" : body);
+            JsonNode payload = request.has("topicRulePayload") ? request.path("topicRulePayload") : request;
+            IotTopicRule rule = iotService.replaceTopicRule(ruleName, payload, regionResolver.resolveRegion(headers));
+            ObjectNode response = objectMapper.createObjectNode();
+            response.put("ruleArn", rule.getRuleArn());
+            response.put("ruleName", rule.getRuleName());
+            return Response.ok(response).build();
+        } catch (JsonProcessingException e) {
+            throw new AwsException("InvalidRequestException", e.getMessage(), 400);
+        }
     }
 
     private Response createTopicRuleResponse(HttpHeaders headers, String ruleName, String body) {
@@ -442,6 +618,25 @@ public class IotController {
         response.put("policyArn", policy.getPolicyArn());
         response.put("policyDocument", policy.getPolicyDocument());
         response.put("defaultVersionId", policy.getDefaultVersionId());
+        return response;
+    }
+
+    private ObjectNode buildPolicyVersionResponse(IotPolicy policy, IotPolicy.PolicyVersion version, boolean isDefault) {
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("policyArn", policy.getPolicyArn());
+        response.put("policyName", policy.getPolicyName());
+        response.put("policyDocument", version.getDocument());
+        response.put("policyVersionId", version.getVersionId());
+        response.put("isDefaultVersion", isDefault);
+        putEpoch(response, "creationDate", version.getCreateDate());
+        return response;
+    }
+
+    private ObjectNode buildPolicyVersionSummary(IotPolicy policy, IotPolicy.PolicyVersion version) {
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("versionId", version.getVersionId());
+        response.put("isDefaultVersion", version.getVersionId().equals(policy.getDefaultVersionId()));
+        putEpoch(response, "createDate", version.getCreateDate());
         return response;
     }
 
