@@ -34,7 +34,9 @@ func TestIoT(t *testing.T) {
 
 	t.Run("ThingRegistryCrud", func(t *testing.T) {
 		thingName := "go-iot-thing"
+		otherThingName := "go-iot-other-thing"
 		_, _ = svc.DeleteThing(ctx, &iot.DeleteThingInput{ThingName: aws.String(thingName)})
+		_, _ = svc.DeleteThing(ctx, &iot.DeleteThingInput{ThingName: aws.String(otherThingName)})
 
 		_, err := svc.DescribeThing(ctx, &iot.DescribeThingInput{ThingName: aws.String(thingName)})
 		require.Error(t, err)
@@ -49,12 +51,23 @@ func TestIoT(t *testing.T) {
 		assert.Equal(t, thingName, aws.ToString(created.ThingName))
 		assert.True(t, strings.HasSuffix(aws.ToString(created.ThingArn), ":thing/"+thingName))
 
+		idempotent, err := svc.CreateThing(ctx, &iot.CreateThingInput{
+			ThingName: aws.String(thingName),
+			AttributePayload: &iottypes.AttributePayload{
+				Attributes: map[string]string{"env": "go"},
+			},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, thingName, aws.ToString(idempotent.ThingName))
+
 		_, err = svc.CreateThing(ctx, &iot.CreateThingInput{ThingName: aws.String(thingName)})
 		require.Error(t, err)
 
 		described, err := svc.DescribeThing(ctx, &iot.DescribeThingInput{ThingName: aws.String(thingName)})
 		require.NoError(t, err)
 		assert.Equal(t, "go", described.Attributes["env"])
+		_, err = svc.CreateThing(ctx, &iot.CreateThingInput{ThingName: aws.String(otherThingName)})
+		require.NoError(t, err)
 
 		listed, err := svc.ListThings(ctx, &iot.ListThingsInput{})
 		require.NoError(t, err)
@@ -66,6 +79,14 @@ func TestIoT(t *testing.T) {
 		}
 		assert.True(t, found)
 
+		firstPage, err := svc.ListThings(ctx, &iot.ListThingsInput{MaxResults: aws.Int32(1)})
+		require.NoError(t, err)
+		require.Len(t, firstPage.Things, 1)
+		require.NotEmpty(t, aws.ToString(firstPage.NextToken))
+		secondPage, err := svc.ListThings(ctx, &iot.ListThingsInput{MaxResults: aws.Int32(1), NextToken: firstPage.NextToken})
+		require.NoError(t, err)
+		require.Len(t, secondPage.Things, 1)
+
 		_, err = svc.UpdateThing(ctx, &iot.UpdateThingInput{
 			ThingName: aws.String(thingName),
 			AttributePayload: &iottypes.AttributePayload{
@@ -73,13 +94,28 @@ func TestIoT(t *testing.T) {
 			},
 		})
 		require.NoError(t, err)
+		_, err = svc.UpdateThing(ctx, &iot.UpdateThingInput{
+			ThingName:        aws.String(thingName),
+			ExpectedVersion:  aws.Int64(2),
+			AttributePayload: &iottypes.AttributePayload{Attributes: map[string]string{"env": "versioned", "owner": "iot"}},
+		})
+		require.NoError(t, err)
+		_, err = svc.UpdateThing(ctx, &iot.UpdateThingInput{
+			ThingName:        aws.String(thingName),
+			ExpectedVersion:  aws.Int64(2),
+			AttributePayload: &iottypes.AttributePayload{Attributes: map[string]string{"env": "stale"}},
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "VersionConflictException")
 
 		updated, err := svc.DescribeThing(ctx, &iot.DescribeThingInput{ThingName: aws.String(thingName)})
 		require.NoError(t, err)
-		assert.Equal(t, "updated", updated.Attributes["env"])
+		assert.Equal(t, "versioned", updated.Attributes["env"])
 		assert.Equal(t, "iot", updated.Attributes["owner"])
 
 		_, err = svc.DeleteThing(ctx, &iot.DeleteThingInput{ThingName: aws.String(thingName)})
+		require.NoError(t, err)
+		_, err = svc.DeleteThing(ctx, &iot.DeleteThingInput{ThingName: aws.String(otherThingName)})
 		require.NoError(t, err)
 
 		_, err = svc.DescribeThing(ctx, &iot.DescribeThingInput{ThingName: aws.String(thingName)})
