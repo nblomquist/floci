@@ -78,15 +78,21 @@ public class IotController {
 
     @GET
     @Path("/things")
-    public Response listThings(@Context HttpHeaders headers) {
+    public Response listThings(@Context HttpHeaders headers,
+                               @QueryParam("maxResults") Integer maxResults,
+                               @QueryParam("nextToken") String nextToken) {
         String region = regionResolver.resolveRegion(headers);
+        IotService.Page<Thing> page = iotService.listThings(region, maxResults, nextToken);
         ObjectNode response = objectMapper.createObjectNode();
         ArrayNode things = response.putArray("things");
-        for (Thing thing : iotService.listThings(region)) {
+        for (Thing thing : page.items()) {
             ObjectNode summary = objectMapper.createObjectNode();
             summary.put("thingName", thing.getThingName());
             summary.put("thingArn", thing.getThingArn());
             things.add(summary);
+        }
+        if (page.nextToken() != null) {
+            response.put("nextToken", page.nextToken());
         }
         return Response.ok(response).build();
     }
@@ -97,7 +103,7 @@ public class IotController {
                                 @Context HttpHeaders headers,
                                 String body) {
         String region = regionResolver.resolveRegion(headers);
-        Thing thing = iotService.updateThing(thingName, parseAttributes(body), region);
+        Thing thing = iotService.updateThing(thingName, parseAttributes(body), parseExpectedVersion(body), region);
         ObjectNode response = objectMapper.createObjectNode();
         response.put("thingName", thing.getThingName());
         response.put("thingArn", thing.getThingArn());
@@ -374,6 +380,15 @@ public class IotController {
                 attributesNode.fields().forEachRemaining(entry -> attributes.put(entry.getKey(), entry.getValue().asText()));
             }
             return attributes;
+        } catch (JsonProcessingException e) {
+            throw new AwsException("InvalidRequestException", e.getMessage(), 400);
+        }
+    }
+
+    private Long parseExpectedVersion(String body) {
+        try {
+            JsonNode request = objectMapper.readTree(body == null || body.isBlank() ? "{}" : body);
+            return request.hasNonNull("expectedVersion") ? request.path("expectedVersion").asLong() : null;
         } catch (JsonProcessingException e) {
             throw new AwsException("InvalidRequestException", e.getMessage(), 400);
         }

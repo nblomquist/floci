@@ -113,7 +113,11 @@ public class IotService {
         startMqttIfEnabled();
         validateThingName(thingName);
         String key = thingKey(region, thingName);
-        if (thingStore.get(key).isPresent()) {
+        Thing existing = thingStore.get(key).orElse(null);
+        if (existing != null) {
+            if (existing.getAttributes().equals(attributes)) {
+                return existing;
+            }
             throw new AwsException("ResourceAlreadyExistsException", "Thing already exists: " + thingName, 409);
         }
 
@@ -143,8 +147,15 @@ public class IotService {
                 .toList();
     }
 
-    public Thing updateThing(String thingName, Map<String, String> attributes, String region) {
+    public Page<Thing> listThings(String region, Integer maxResults, String nextToken) {
+        return paginate(listThings(region), maxResults, nextToken);
+    }
+
+    public Thing updateThing(String thingName, Map<String, String> attributes, Long expectedVersion, String region) {
         Thing thing = describeThing(thingName, region);
+        if (expectedVersion != null && thing.getVersion() != expectedVersion) {
+            throw new AwsException("VersionConflictException", "Thing version does not match expectedVersion", 409);
+        }
         thing.setAttributes(attributes);
         thing.setVersion(thing.getVersion() + 1);
         thing.setLastModifiedDate(Instant.now());
@@ -396,6 +407,28 @@ public class IotService {
 
     private String thingKey(String region, String thingName) {
         return "thing:" + region + ":" + thingName;
+    }
+
+    private <T> Page<T> paginate(List<T> items, Integer maxResults, String nextToken) {
+        int start = parseNextToken(nextToken);
+        if (start > items.size()) {
+            start = items.size();
+        }
+        int limit = maxResults == null ? items.size() - start : Math.max(0, maxResults);
+        int end = Math.min(items.size(), start + limit);
+        String followingToken = end < items.size() ? Integer.toString(end) : null;
+        return new Page<>(items.subList(start, end), followingToken);
+    }
+
+    private int parseNextToken(String nextToken) {
+        if (nextToken == null || nextToken.isBlank()) {
+            return 0;
+        }
+        try {
+            return Math.max(0, Integer.parseInt(nextToken));
+        } catch (NumberFormatException e) {
+            throw new AwsException("InvalidRequestException", "Invalid nextToken", 400);
+        }
     }
 
     private void startMqttIfEnabled() {
@@ -652,5 +685,8 @@ public class IotService {
             }
             return "$aws/things/" + thingName + "/shadow/update";
         }
+    }
+
+    public record Page<T>(List<T> items, String nextToken) {
     }
 }

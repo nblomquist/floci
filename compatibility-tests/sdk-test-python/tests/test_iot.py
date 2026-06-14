@@ -12,6 +12,7 @@ def test_describe_endpoint(iot_client):
 
 def test_thing_registry_crud(iot_client, unique_name):
     thing_name = f"{unique_name}-thing"
+    other_thing_name = f"{unique_name}-other-thing"
 
     missing = False
     try:
@@ -27,6 +28,12 @@ def test_thing_registry_crud(iot_client, unique_name):
     assert created["thingName"] == thing_name
     assert created["thingArn"].endswith(f":thing/{thing_name}")
 
+    idempotent = iot_client.create_thing(
+        thingName=thing_name,
+        attributePayload={"attributes": {"env": "python"}},
+    )
+    assert idempotent["thingName"] == thing_name
+
     try:
         iot_client.create_thing(thingName=thing_name)
         raise AssertionError("duplicate create should fail")
@@ -36,17 +43,41 @@ def test_thing_registry_crud(iot_client, unique_name):
     described = iot_client.describe_thing(thingName=thing_name)
     assert described["attributes"]["env"] == "python"
 
+    iot_client.create_thing(thingName=other_thing_name)
+
     listed = iot_client.list_things()
     assert any(thing["thingName"] == thing_name for thing in listed["things"])
+
+    first_page = iot_client.list_things(maxResults=1)
+    assert len(first_page["things"]) == 1
+    assert first_page.get("nextToken")
+    second_page = iot_client.list_things(maxResults=1, nextToken=first_page["nextToken"])
+    assert len(second_page["things"]) == 1
 
     iot_client.update_thing(
         thingName=thing_name,
         attributePayload={"attributes": {"env": "updated", "owner": "iot"}},
     )
+    iot_client.update_thing(
+        thingName=thing_name,
+        expectedVersion=2,
+        attributePayload={"attributes": {"env": "versioned", "owner": "iot"}},
+    )
+    try:
+        iot_client.update_thing(
+            thingName=thing_name,
+            expectedVersion=2,
+            attributePayload={"attributes": {"env": "stale"}},
+        )
+        raise AssertionError("stale expectedVersion should fail")
+    except ClientError as exc:
+        assert exc.response["Error"]["Code"] == "VersionConflictException"
+
     updated = iot_client.describe_thing(thingName=thing_name)
-    assert updated["attributes"] == {"env": "updated", "owner": "iot"}
+    assert updated["attributes"] == {"env": "versioned", "owner": "iot"}
 
     iot_client.delete_thing(thingName=thing_name)
+    iot_client.delete_thing(thingName=other_thing_name)
     try:
         iot_client.describe_thing(thingName=thing_name)
         raise AssertionError("describe after delete should fail")

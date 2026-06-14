@@ -90,6 +90,28 @@ class IotIntegrationTest {
 
     @Test
     @Order(6)
+    void identicalCreateThingIsIdempotent() {
+        given()
+            .contentType("application/json")
+            .body("""
+                {
+                  "attributePayload": {
+                    "attributes": {
+                      "env": "test"
+                    }
+                  }
+                }
+                """)
+        .when()
+            .post("/things/phase-two-thing")
+        .then()
+            .statusCode(200)
+            .body("thingName", equalTo("phase-two-thing"))
+            .body("attributes.env", equalTo("test"));
+    }
+
+    @Test
+    @Order(7)
     void duplicateCreateThingReturnsConflict() {
         given()
             .contentType("application/json")
@@ -102,7 +124,7 @@ class IotIntegrationTest {
     }
 
     @Test
-    @Order(7)
+    @Order(8)
     void describeThingReturnsStoredThing() {
         given()
         .when()
@@ -116,7 +138,7 @@ class IotIntegrationTest {
     }
 
     @Test
-    @Order(8)
+    @Order(9)
     void listThingsIncludesCreatedThing() {
         given()
             .contentType("application/json")
@@ -133,10 +155,30 @@ class IotIntegrationTest {
             .statusCode(200)
             .body("things.thingName", hasItem("phase-two-thing"))
             .body("things.thingName", hasItem("phase-two-other"));
+
+        String nextToken = given()
+            .queryParam("maxResults", 1)
+        .when()
+            .get("/things")
+        .then()
+            .statusCode(200)
+            .body("things.size()", equalTo(1))
+            .body("nextToken", notNullValue())
+            .extract()
+            .path("nextToken");
+
+        given()
+            .queryParam("maxResults", 1)
+            .queryParam("nextToken", nextToken)
+        .when()
+            .get("/things")
+        .then()
+            .statusCode(200)
+            .body("things.size()", equalTo(1));
     }
 
     @Test
-    @Order(9)
+    @Order(10)
     void updateThingChangesAttributes() {
         given()
             .contentType("application/json")
@@ -157,16 +199,53 @@ class IotIntegrationTest {
             .body("version", equalTo(2));
 
         given()
+            .contentType("application/json")
+            .body("""
+                {
+                  "expectedVersion": 2,
+                  "attributePayload": {
+                    "attributes": {
+                      "env": "versioned",
+                      "owner": "iot"
+                    }
+                  }
+                }
+                """)
+        .when()
+            .patch("/things/phase-two-thing")
+        .then()
+            .statusCode(200)
+            .body("version", equalTo(3));
+
+        given()
+            .contentType("application/json")
+            .body("""
+                {
+                  "expectedVersion": 2,
+                  "attributePayload": {
+                    "attributes": {
+                      "env": "stale"
+                    }
+                  }
+                }
+                """)
+        .when()
+            .patch("/things/phase-two-thing")
+        .then()
+            .statusCode(409)
+            .body("__type", equalTo("VersionConflictException"));
+
+        given()
         .when()
             .get("/things/phase-two-thing")
         .then()
             .statusCode(200)
-            .body("attributes.env", equalTo("updated"))
+            .body("attributes.env", equalTo("versioned"))
             .body("attributes.owner", equalTo("iot"));
     }
 
     @Test
-    @Order(10)
+    @Order(11)
     void deleteThingRemovesThing() {
         given()
         .when()
@@ -190,7 +269,7 @@ class IotIntegrationTest {
     }
 
     @Test
-    @Order(11)
+    @Order(12)
     void listTagsForUntaggedThingReturnsEmptyList() {
         String thingArn = createThingAndReturnArn("phase-three-untagged");
 
@@ -204,7 +283,7 @@ class IotIntegrationTest {
     }
 
     @Test
-    @Order(12)
+    @Order(13)
     void tagResourceAddsThingTags() {
         String thingArn = createThingAndReturnArn("phase-three-tagged");
 
@@ -237,7 +316,7 @@ class IotIntegrationTest {
     }
 
     @Test
-    @Order(13)
+    @Order(14)
     void untagResourceRemovesSelectedThingTags() {
         String thingArn = createThingAndReturnArn("phase-three-untag");
 
@@ -281,7 +360,7 @@ class IotIntegrationTest {
     }
 
     @Test
-    @Order(14)
+    @Order(15)
     void taggingMissingThingReturnsAwsError() {
         String missingThingArn = "arn:aws:iot:us-east-1:000000000000:thing/phase-three-missing";
 
@@ -295,7 +374,7 @@ class IotIntegrationTest {
     }
 
     @Test
-    @Order(15)
+    @Order(16)
     void certificatesPoliciesAndAttachmentsRoundTrip() {
         String certificateArn = given()
             .contentType("application/json")

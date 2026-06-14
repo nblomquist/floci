@@ -41,6 +41,7 @@ import software.amazon.awssdk.services.iot.model.TopicRulePayload;
 import software.amazon.awssdk.services.iot.model.UntagResourceRequest;
 import software.amazon.awssdk.services.iot.model.UpdateCertificateRequest;
 import software.amazon.awssdk.services.iot.model.UpdateThingRequest;
+import software.amazon.awssdk.services.iot.model.VersionConflictException;
 import software.amazon.awssdk.services.iotdataplane.IotDataPlaneClient;
 import software.amazon.awssdk.services.iotdataplane.model.DeleteThingShadowRequest;
 import software.amazon.awssdk.services.iotdataplane.model.GetThingShadowRequest;
@@ -86,8 +87,10 @@ class IotTest {
     @Test
     void thingRegistryCrud() {
         String thingName = "java-iot-thing";
+        String otherThingName = "java-iot-other-thing";
         try {
             iot.deleteThing(DeleteThingRequest.builder().thingName(thingName).build());
+            iot.deleteThing(DeleteThingRequest.builder().thingName(otherThingName).build());
         } catch (Exception ignored) {
         }
 
@@ -101,14 +104,31 @@ class IotTest {
         assertThat(created.thingName()).isEqualTo(thingName);
         assertThat(created.thingArn()).endsWith(":thing/" + thingName);
 
+        var idempotent = iot.createThing(CreateThingRequest.builder()
+                .thingName(thingName)
+                .attributePayload(AttributePayload.builder().attributes(Map.of("env", "java")).build())
+                .build());
+        assertThat(idempotent.thingName()).isEqualTo(thingName);
+
         assertThatThrownBy(() -> iot.createThing(CreateThingRequest.builder().thingName(thingName).build()))
                 .isInstanceOf(ResourceAlreadyExistsException.class);
 
         var described = iot.describeThing(DescribeThingRequest.builder().thingName(thingName).build());
         assertThat(described.attributes()).containsEntry("env", "java");
 
+        iot.createThing(CreateThingRequest.builder().thingName(otherThingName).build());
+
         var listed = iot.listThings(ListThingsRequest.builder().build());
         assertThat(listed.things()).anyMatch(thing -> thingName.equals(thing.thingName()));
+
+        var firstPage = iot.listThings(ListThingsRequest.builder().maxResults(1).build());
+        assertThat(firstPage.things()).hasSize(1);
+        assertThat(firstPage.nextToken()).isNotBlank();
+        var secondPage = iot.listThings(ListThingsRequest.builder()
+                .maxResults(1)
+                .nextToken(firstPage.nextToken())
+                .build());
+        assertThat(secondPage.things()).hasSize(1);
 
         iot.updateThing(UpdateThingRequest.builder()
                 .thingName(thingName)
@@ -117,10 +137,26 @@ class IotTest {
                         .build())
                 .build());
 
+        iot.updateThing(UpdateThingRequest.builder()
+                .thingName(thingName)
+                .expectedVersion(2L)
+                .attributePayload(AttributePayload.builder()
+                        .attributes(Map.of("env", "versioned", "owner", "iot"))
+                        .build())
+                .build());
+
+        assertThatThrownBy(() -> iot.updateThing(UpdateThingRequest.builder()
+                .thingName(thingName)
+                .expectedVersion(2L)
+                .attributePayload(AttributePayload.builder().attributes(Map.of("env", "stale")).build())
+                .build()))
+                .isInstanceOf(VersionConflictException.class);
+
         var updated = iot.describeThing(DescribeThingRequest.builder().thingName(thingName).build());
-        assertThat(updated.attributes()).containsEntry("env", "updated").containsEntry("owner", "iot");
+        assertThat(updated.attributes()).containsEntry("env", "versioned").containsEntry("owner", "iot");
 
         iot.deleteThing(DeleteThingRequest.builder().thingName(thingName).build());
+        iot.deleteThing(DeleteThingRequest.builder().thingName(otherThingName).build());
         assertThatThrownBy(() -> iot.describeThing(DescribeThingRequest.builder().thingName(thingName).build()))
                 .isInstanceOf(ResourceNotFoundException.class);
     }
