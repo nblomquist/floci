@@ -81,6 +81,56 @@ class IotMqttEnabledIntegrationTest {
     }
 
     @Test
+    void connectionApisReturnLiveMqttStateAndSendDirectMessage() throws Exception {
+        String clientId = "phase6-connection-" + System.nanoTime();
+        String topic = "phase6/direct/" + System.nanoTime();
+        byte[] payload = "direct-payload".getBytes(StandardCharsets.UTF_8);
+
+        try (Socket client = connectMqttClientId(clientId)) {
+            subscribe(client, topic);
+
+            given()
+                .queryParam("includeSocketInformation", true)
+            .when()
+                .get("/connections/{clientId}", clientId)
+            .then()
+                .statusCode(200)
+                .body("clientId", equalTo(clientId))
+                .body("connected", equalTo(true))
+                .body("cleanSession", equalTo(true))
+                .body("sourceIp", equalTo("127.0.0.1"));
+
+            given()
+            .when()
+                .get("/connections/{clientId}/subscriptions", clientId)
+            .then()
+                .statusCode(200)
+                .body("subscriptions[0].topicFilter", equalTo(topic))
+                .body("subscriptions[0].qos", equalTo(0));
+
+            given()
+                .queryParam("topic", topic)
+                .body(payload)
+            .when()
+                .post("/connections/{clientId}/messages", clientId)
+            .then()
+                .statusCode(200)
+                .body("message", equalTo("OK"));
+
+            MqttPublish received = readPublish(client.getInputStream());
+            assertEquals(topic, received.topic());
+            assertArrayEquals(payload, received.payload());
+        }
+
+        given()
+        .when()
+            .get("/connections/{clientId}", clientId)
+        .then()
+            .statusCode(404)
+            .body("__type", equalTo("ResourceNotFoundException"));
+    }
+
+    @Test
     void mqttPublishEmitsEventAndDeliversToSubscriber() throws Exception {
         String topic = "phase6/devices/one/events";
         byte[] payload = "hello-phase-six".getBytes(StandardCharsets.UTF_8);
@@ -93,6 +143,27 @@ class IotMqttEnabledIntegrationTest {
             }
 
             MqttPublish received = readPublish(subscriber.getInputStream());
+            assertEquals(topic, received.topic());
+            assertArrayEquals(payload, received.payload());
+        }
+
+        awaitPublishedEvent(topic, payload);
+    }
+
+    @Test
+    void mqttQos1PublishIsAcknowledgedAndDelivered() throws Exception {
+        String topic = "phase6/devices/qos1/events";
+        byte[] payload = "hello-qos-one".getBytes(StandardCharsets.UTF_8);
+
+        try (Socket subscriber = connectMqtt("phase6-qos1-sub")) {
+            subscribe(subscriber, topic, 1);
+
+            try (Socket publisher = connectMqtt("phase6-qos1-pub")) {
+                publishQos1(publisher, topic, payload, 7);
+                assertArrayEquals(new byte[] {0x40, 0x02, 0x00, 0x07}, readPacket(publisher.getInputStream()));
+            }
+
+            MqttPublish received = readQos1Publish(subscriber.getInputStream());
             assertEquals(topic, received.topic());
             assertArrayEquals(payload, received.payload());
         }
@@ -337,14 +408,18 @@ class IotMqttEnabledIntegrationTest {
     }
 
     private void subscribe(Socket socket, String topic) throws IOException {
+        subscribe(socket, topic, 0);
+    }
+
+    private void subscribe(Socket socket, String topic, int qos) throws IOException {
         ByteArrayOutputStream variable = new ByteArrayOutputStream();
         variable.write(0x00);
         variable.write(0x01);
         writeUtf8(variable, topic);
-        variable.write(0x00);
+        variable.write(qos);
         socket.getOutputStream().write(packet(0x82, variable.toByteArray()));
         byte[] suback = readPacket(socket.getInputStream());
-        assertArrayEquals(new byte[] {(byte) 0x90, 0x03, 0x00, 0x01, 0x00}, suback);
+        assertArrayEquals(new byte[] {(byte) 0x90, 0x03, 0x00, 0x01, (byte) qos}, suback);
     }
 
     private void subscribeMqtt5(Socket socket, String topic) throws IOException {
@@ -374,6 +449,15 @@ class IotMqttEnabledIntegrationTest {
         socket.getOutputStream().write(packet(0x30, variable.toByteArray()));
     }
 
+    private void publishQos1(Socket socket, String topic, byte[] payload, int packetId) throws IOException {
+        ByteArrayOutputStream variable = new ByteArrayOutputStream();
+        writeUtf8(variable, topic);
+        variable.write((packetId >>> 8) & 0xff);
+        variable.write(packetId & 0xff);
+        variable.write(payload);
+        socket.getOutputStream().write(packet(0x32, variable.toByteArray()));
+    }
+
     private void publishMqtt5(Socket socket, String topic, byte[] payload) throws IOException {
         ByteArrayOutputStream variable = new ByteArrayOutputStream();
         writeUtf8(variable, topic);
@@ -393,6 +477,18 @@ class IotMqttEnabledIntegrationTest {
         position += 2;
         String topic = new String(packet, position, topicLength, StandardCharsets.UTF_8);
         position += topicLength;
+        return new MqttPublish(topic, Arrays.copyOfRange(packet, position, packet.length));
+    }
+
+    private MqttPublish readQos1Publish(InputStream input) throws IOException {
+        byte[] packet = readPacket(input);
+        assertEquals(0x32, packet[0] & 0xff);
+        int remainingLengthBytes = remainingLengthBytes(packet);
+        int position = 1 + remainingLengthBytes;
+        int topicLength = ((packet[position] & 0xff) << 8) | (packet[position + 1] & 0xff);
+        position += 2;
+        String topic = new String(packet, position, topicLength, StandardCharsets.UTF_8);
+        position += topicLength + 2;
         return new MqttPublish(topic, Arrays.copyOfRange(packet, position, packet.length));
     }
 

@@ -12,11 +12,16 @@ import (
 	"floci-sdk-test-go/internal/testutil"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	ddbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/iot"
 	iottypes "github.com/aws/aws-sdk-go-v2/service/iot/types"
 	"github.com/aws/aws-sdk-go-v2/service/iotdataplane"
 	jobsdata "github.com/aws/aws-sdk-go-v2/service/iotjobsdataplane"
 	jobsdatatypes "github.com/aws/aws-sdk-go-v2/service/iotjobsdataplane/types"
+	"github.com/aws/aws-sdk-go-v2/service/kinesis"
+	kinesistypes "github.com/aws/aws-sdk-go-v2/service/kinesis/types"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -271,16 +276,49 @@ func TestIoT(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	t.Run("TopicRuleCrudAndSqsAction", func(t *testing.T) {
+	t.Run("TopicRuleCrudAndRuleActions", func(t *testing.T) {
 		dataSvc := testutil.IoTDataClient()
+		dynamoSvc := testutil.DynamoDBClient()
+		kinesisSvc := testutil.KinesisClient()
+		s3Svc := testutil.S3Client()
 		sqsSvc := testutil.SQSClient()
 		ruleName := "go-iot-topic-rule"
+		bucketName := "go-iot-rule-bucket"
+		dynamoTable := "go-iot-rule-table"
+		streamName := "go-iot-rule-stream"
+		objectKey := "rules/output.json"
 		queueName := "go-iot-rule-queue"
+		_, _ = dynamoSvc.DeleteTable(ctx, &dynamodb.DeleteTableInput{TableName: aws.String(dynamoTable)})
+		_, _ = kinesisSvc.DeleteStream(ctx, &kinesis.DeleteStreamInput{StreamName: aws.String(streamName)})
+		_, _ = s3Svc.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(bucketName), Key: aws.String(objectKey)})
+		_, _ = s3Svc.DeleteBucket(ctx, &s3.DeleteBucketInput{Bucket: aws.String(bucketName)})
+		_, err := dynamoSvc.CreateTable(ctx, &dynamodb.CreateTableInput{
+			TableName:   aws.String(dynamoTable),
+			BillingMode: ddbtypes.BillingModePayPerRequest,
+			AttributeDefinitions: []ddbtypes.AttributeDefinition{
+				{AttributeName: aws.String("pk"), AttributeType: ddbtypes.ScalarAttributeTypeS},
+				{AttributeName: aws.String("sk"), AttributeType: ddbtypes.ScalarAttributeTypeS},
+			},
+			KeySchema: []ddbtypes.KeySchemaElement{
+				{AttributeName: aws.String("pk"), KeyType: ddbtypes.KeyTypeHash},
+				{AttributeName: aws.String("sk"), KeyType: ddbtypes.KeyTypeRange},
+			},
+		})
+		require.NoError(t, err)
+		defer dynamoSvc.DeleteTable(ctx, &dynamodb.DeleteTableInput{TableName: aws.String(dynamoTable)})
+		_, err = kinesisSvc.CreateStream(ctx, &kinesis.CreateStreamInput{StreamName: aws.String(streamName), ShardCount: aws.Int32(1)})
+		require.NoError(t, err)
+		defer kinesisSvc.DeleteStream(ctx, &kinesis.DeleteStreamInput{StreamName: aws.String(streamName)})
+		_, err = s3Svc.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: aws.String(bucketName)})
+		require.NoError(t, err)
+		defer s3Svc.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(bucketName), Key: aws.String(objectKey)})
+		defer s3Svc.DeleteBucket(ctx, &s3.DeleteBucketInput{Bucket: aws.String(bucketName)})
 		queue, err := sqsSvc.CreateQueue(ctx, &sqs.CreateQueueInput{QueueName: aws.String(queueName)})
 		require.NoError(t, err)
 		queueURL := aws.ToString(queue.QueueUrl)
 		defer sqsSvc.DeleteQueue(ctx, &sqs.DeleteQueueInput{QueueUrl: aws.String(queueURL)})
 		defer svc.DeleteTopicRule(ctx, &iot.DeleteTopicRuleInput{RuleName: aws.String(ruleName)})
+		payload := []byte(`{"pk":"iot#1","sk":"event","message":"go-rule-payload"}`)
 
 		_, err = svc.CreateTopicRule(ctx, &iot.CreateTopicRuleInput{
 			RuleName: aws.String(ruleName),
@@ -288,11 +326,27 @@ func TestIoT(t *testing.T) {
 				Sql:          aws.String("SELECT * FROM 'devices/go-iot/rules'"),
 				Description:  aws.String("go topic rule"),
 				RuleDisabled: aws.Bool(false),
-				Actions: []iottypes.Action{{Sqs: &iottypes.SqsAction{
-					RoleArn:   aws.String("arn:aws:iam::000000000000:role/iot-rule-role"),
-					QueueUrl:  aws.String(queueURL),
-					UseBase64: aws.Bool(false),
-				}}},
+				Actions: []iottypes.Action{
+					{Sqs: &iottypes.SqsAction{
+						RoleArn:   aws.String("arn:aws:iam::000000000000:role/iot-rule-role"),
+						QueueUrl:  aws.String(queueURL),
+						UseBase64: aws.Bool(false),
+					}},
+					{S3: &iottypes.S3Action{
+						RoleArn:    aws.String("arn:aws:iam::000000000000:role/iot-rule-role"),
+						BucketName: aws.String(bucketName),
+						Key:        aws.String(objectKey),
+					}},
+					{Kinesis: &iottypes.KinesisAction{
+						RoleArn:      aws.String("arn:aws:iam::000000000000:role/iot-rule-role"),
+						StreamName:   aws.String(streamName),
+						PartitionKey: aws.String("iot-rule"),
+					}},
+					{DynamoDBv2: &iottypes.DynamoDBv2Action{
+						RoleArn: aws.String("arn:aws:iam::000000000000:role/iot-rule-role"),
+						PutItem: &iottypes.PutItemInput{TableName: aws.String(dynamoTable)},
+					}},
+				},
 			},
 		})
 		require.NoError(t, err)
@@ -302,6 +356,9 @@ func TestIoT(t *testing.T) {
 		require.NotNil(t, got.Rule)
 		assert.Equal(t, ruleName, aws.ToString(got.Rule.RuleName))
 		assert.Equal(t, queueURL, aws.ToString(got.Rule.Actions[0].Sqs.QueueUrl))
+		assert.Equal(t, bucketName, aws.ToString(got.Rule.Actions[1].S3.BucketName))
+		assert.Equal(t, streamName, aws.ToString(got.Rule.Actions[2].Kinesis.StreamName))
+		assert.Equal(t, dynamoTable, aws.ToString(got.Rule.Actions[3].DynamoDBv2.PutItem.TableName))
 
 		_, err = svc.DisableTopicRule(ctx, &iot.DisableTopicRuleInput{RuleName: aws.String(ruleName)})
 		require.NoError(t, err)
@@ -317,13 +374,45 @@ func TestIoT(t *testing.T) {
 
 		_, err = svc.EnableTopicRule(ctx, &iot.EnableTopicRuleInput{RuleName: aws.String(ruleName)})
 		require.NoError(t, err)
-		_, err = dataSvc.Publish(ctx, &iotdataplane.PublishInput{Topic: aws.String("devices/go-iot/rules"), Payload: []byte("go-rule-payload")})
+		_, err = dataSvc.Publish(ctx, &iotdataplane.PublishInput{Topic: aws.String("devices/go-iot/rules"), Payload: payload})
 		require.NoError(t, err)
 
 		received, err := sqsSvc.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{QueueUrl: aws.String(queueURL), MaxNumberOfMessages: 1})
 		require.NoError(t, err)
 		require.Len(t, received.Messages, 1)
-		assert.Equal(t, "go-rule-payload", aws.ToString(received.Messages[0].Body))
+		assert.Equal(t, string(payload), aws.ToString(received.Messages[0].Body))
+
+		object, err := s3Svc.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(bucketName), Key: aws.String(objectKey)})
+		require.NoError(t, err)
+		defer object.Body.Close()
+		body, err := io.ReadAll(object.Body)
+		require.NoError(t, err)
+		assert.Equal(t, string(payload), string(body))
+
+		dynamoItem, err := dynamoSvc.GetItem(ctx, &dynamodb.GetItemInput{
+			TableName: aws.String(dynamoTable),
+			Key: map[string]ddbtypes.AttributeValue{
+				"pk": &ddbtypes.AttributeValueMemberS{Value: "iot#1"},
+				"sk": &ddbtypes.AttributeValueMemberS{Value: "event"},
+			},
+		})
+		require.NoError(t, err)
+		message, ok := dynamoItem.Item["message"].(*ddbtypes.AttributeValueMemberS)
+		require.True(t, ok)
+		assert.Equal(t, "go-rule-payload", message.Value)
+
+		stream, err := kinesisSvc.DescribeStream(ctx, &kinesis.DescribeStreamInput{StreamName: aws.String(streamName)})
+		require.NoError(t, err)
+		iterator, err := kinesisSvc.GetShardIterator(ctx, &kinesis.GetShardIteratorInput{
+			StreamName:        aws.String(streamName),
+			ShardId:           stream.StreamDescription.Shards[0].ShardId,
+			ShardIteratorType: kinesistypes.ShardIteratorTypeTrimHorizon,
+		})
+		require.NoError(t, err)
+		records, err := kinesisSvc.GetRecords(ctx, &kinesis.GetRecordsInput{ShardIterator: iterator.ShardIterator})
+		require.NoError(t, err)
+		require.NotEmpty(t, records.Records)
+		assert.Equal(t, payload, records.Records[0].Data)
 	})
 
 	t.Run("ThingTypesGroupsAndJobs", func(t *testing.T) {
@@ -438,6 +527,43 @@ func TestIoT(t *testing.T) {
 		publisher.Close()
 
 		receivedTopic, receivedPayload := mqttReadPublish(t, subscriber)
+		assert.Equal(t, topic, receivedTopic)
+		assert.Equal(t, payload, receivedPayload)
+	})
+
+	t.Run("IoTDataConnectionApis", func(t *testing.T) {
+		dataSvc := testutil.IoTDataClient()
+		clientID := "go-iot-connection"
+		topic := "devices/go-iot-connection/direct"
+		payload := []byte("go-direct")
+
+		client := mqttConnect(t, clientID)
+		defer client.Close()
+		mqttSubscribe(t, client, topic)
+
+		connection, err := dataSvc.GetConnection(ctx, &iotdataplane.GetConnectionInput{
+			ClientId:                 aws.String(clientID),
+			IncludeSocketInformation: true,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, clientID, aws.ToString(connection.ClientId))
+		assert.True(t, connection.Connected)
+		assert.NotEmpty(t, aws.ToString(connection.SourceIp))
+
+		subscriptions, err := dataSvc.ListSubscriptions(ctx, &iotdataplane.ListSubscriptionsInput{ClientId: aws.String(clientID)})
+		require.NoError(t, err)
+		require.NotEmpty(t, subscriptions.Subscriptions)
+		assert.Equal(t, topic, aws.ToString(subscriptions.Subscriptions[0].TopicFilter))
+
+		direct, err := dataSvc.SendDirectMessage(ctx, &iotdataplane.SendDirectMessageInput{
+			ClientId: aws.String(clientID),
+			Topic:    aws.String(topic),
+			Payload:  payload,
+		})
+		require.NoError(t, err)
+		assert.NotEmpty(t, aws.ToString(direct.TraceId))
+
+		receivedTopic, receivedPayload := mqttReadPublish(t, client)
 		assert.Equal(t, topic, receivedTopic)
 		assert.Equal(t, payload, receivedPayload)
 	})

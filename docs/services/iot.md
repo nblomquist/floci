@@ -15,7 +15,7 @@ Supported MVP 1 behavior:
 - Tags for things, certificates, policies, and topic rules.
 - IoT Data retained messages: retained `Publish`, `GetRetainedMessage`, and paginated `ListRetainedMessages`.
 - Shadow null-delete and version-conflict behavior for HTTP and shared service paths.
-- Topic rule duplicate/delete/replace semantics, plus `republish`, `sqs`, and `sns` action dispatch.
+- Topic rule duplicate/delete/replace semantics, plus `republish`, `sqs`, `sns`, `s3`, `dynamoDBv2`, `kinesis`, and `lambda` action dispatch.
 
 Current MVP 1 limitations:
 
@@ -34,11 +34,17 @@ Supported MVP 2 behavior:
 - Jobs control plane: `CreateJob`, `DescribeJob`, and `ListJobs`, including thing ARN targets and static thing group targets.
 - Jobs data plane: pending-job listing, `StartNextPendingJobExecution`, `DescribeJobExecution`, and `UpdateJobExecution` with version conflicts and terminal-state checks.
 - Endpoint discovery accepts `iot:Jobs` in addition to IoT Data endpoint types.
-- IoT Data `DeleteConnection` closes active MQTT client sessions through the embedded broker and optionally purges broker session state for `cleanSession=true`.
+- MQTT clients can use QoS 1 subscribe/publish paths with broker PUBACK and delivery behavior.
+- IoT Data connection APIs for live MQTT sessions: `GetConnection`, `DeleteConnection`, `ListSubscriptions`, and `SendDirectMessage`.
+- `DeleteConnection` closes active MQTT client sessions through the embedded broker and optionally purges broker session state for `cleanSession=true`.
+- IoT rules can dispatch matching payloads to SQS, SNS, S3, DynamoDB v2, Kinesis, Lambda, and MQTT republish targets.
 
 Current MVP 2 limitations:
 
 - `DeleteConnection.preventWillMessage` is accepted for SDK request compatibility, but the embedded broker does not expose selective Last Will suppression.
+- HTTP IoT Data `Publish` still treats QoS and MQTT5 metadata as compatibility inputs only; those properties are not fully forwarded or persisted yet.
+- `SendDirectMessage` publishes to the requested MQTT topic through the embedded broker. Unlike AWS IoT Core, it does not yet bypass subscription matching to deliver to a client that is not subscribed to that topic.
+- `GetConnection` and `ListSubscriptions` report live in-memory broker state only; offline persistent session subscription reporting is not modeled yet.
 - Jobs reserved MQTT topics remain follow-up scope; Jobs Data HTTP APIs are implemented first.
 - Dynamic thing groups, fleet indexing, job rollouts, cancellations, documents from S3, and advanced job scheduling are not yet modeled.
 
@@ -109,7 +115,7 @@ Phase 7 completion criteria:
 
 ## Rules Engine
 
-Status: complete for the first action slice.
+Status: complete for the MVP 2 action slice.
 
 Phase 8 adds stored IoT topic rules and dispatches matching IoT publishes to rule actions.
 
@@ -121,10 +127,15 @@ Supported rule behavior:
 - IoT Data `Publish` and MQTT publishes use the same rule dispatch path.
 - `republish` action republishes the original payload to another MQTT topic through Moquette.
 - `sqs` action sends the original payload to an SQS queue through Floci's SQS service boundary.
+- `sns` action publishes the original payload to an SNS topic through Floci's SNS service boundary.
+- `s3` action writes the original payload to the configured bucket/key through Floci's S3 service boundary.
+- `dynamoDBv2` action writes JSON object payload fields as DynamoDB attribute values through Floci's DynamoDB service boundary.
+- `kinesis` action puts the original payload into a Kinesis stream through Floci's Kinesis service boundary.
+- `lambda` action invokes the configured function ARN through Floci's Lambda service boundary.
 
 Current limitations:
 
-- SQL projection, WHERE clauses, functions, substitutions, error actions, and additional AWS IoT rule action types are follow-up scope.
+- SQL projection, WHERE clauses, functions, substitutions, error actions, and less common AWS IoT rule action types are follow-up scope.
 
 Open follow-up scope for phase 7 unless explicitly deferred:
 
