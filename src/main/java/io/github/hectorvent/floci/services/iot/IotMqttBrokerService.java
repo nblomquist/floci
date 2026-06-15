@@ -3,8 +3,8 @@ package io.github.hectorvent.floci.services.iot;
 import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.moquette.BrokerConstants;
 import io.moquette.broker.Server;
+import io.moquette.broker.config.FluentConfig;
 import io.moquette.broker.config.IConfig;
-import io.moquette.broker.config.MemoryConfig;
 import io.moquette.interception.AbstractInterceptHandler;
 import io.moquette.interception.messages.InterceptConnectionLostMessage;
 import io.moquette.interception.messages.InterceptDisconnectMessage;
@@ -29,7 +29,6 @@ import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -77,12 +76,12 @@ public class IotMqttBrokerService {
             return;
         }
 
-        Properties properties = new Properties();
-        properties.setProperty("host", config.services().iot().mqtt().host());
-        properties.setProperty("port", Integer.toString(config.services().iot().mqtt().port()));
-        properties.setProperty("allow_anonymous", "true");
-        properties.setProperty(BrokerConstants.ALLOW_RESERVED_PUBLISH_PREFIXES, "$aws/");
-        IConfig brokerConfig = new MemoryConfig(properties);
+        IConfig brokerConfig = new FluentConfig()
+                .host(config.services().iot().mqtt().host())
+                .port(config.services().iot().mqtt().port())
+                .disablePersistence()
+                .build();
+        brokerConfig.setProperty(BrokerConstants.ALLOW_RESERVED_PUBLISH_PREFIXES, "$aws/");
 
         try {
             Server broker = new Server();
