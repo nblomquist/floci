@@ -21,6 +21,7 @@ import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
 import java.util.Base64;
+import java.util.UUID;
 
 @Path("/")
 @Produces(MediaType.APPLICATION_JSON)
@@ -99,6 +100,55 @@ public class IotDataController {
                                      @QueryParam("preventWillMessage") Boolean preventWillMessage) {
         iotService.deleteConnection(clientId, Boolean.TRUE.equals(cleanSession));
         return Response.ok().build();
+    }
+
+    @GET
+    @Path("/connections/{clientId: .+}/subscriptions")
+    public Response listSubscriptions(@PathParam("clientId") String clientId,
+                                      @QueryParam("maxResults") Integer maxResults,
+                                      @QueryParam("nextToken") String nextToken) {
+        IotService.Page<String> page = iotService.listSubscriptions(clientId, maxResults, nextToken);
+        ObjectNode response = objectMapper.createObjectNode();
+        var subscriptions = response.putArray("subscriptions");
+        for (String topicFilter : page.items()) {
+            ObjectNode subscription = subscriptions.addObject();
+            subscription.put("topicFilter", topicFilter);
+            subscription.put("qos", 0);
+        }
+        if (page.nextToken() != null) {
+            response.put("nextToken", page.nextToken());
+        }
+        return Response.ok(response).build();
+    }
+
+    @GET
+    @Path("/connections/{clientId: .+}")
+    public Response getConnection(@PathParam("clientId") String clientId,
+                                  @QueryParam("includeSocketInformation") Boolean includeSocketInformation) {
+        IotMqttBrokerService.ConnectionInfo connection = iotService.getConnection(clientId);
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("clientId", connection.clientId());
+        response.put("connected", true);
+        response.put("cleanSession", true);
+        if (Boolean.TRUE.equals(includeSocketInformation)) {
+            response.put("sourceIp", connection.address());
+            response.put("sourcePort", connection.port());
+        }
+        return Response.ok(response).build();
+    }
+
+    @POST
+    @Path("/connections/{clientId: .+}/messages")
+    @Consumes(MediaType.WILDCARD)
+    public Response sendDirectMessage(@PathParam("clientId") String clientId,
+                                      @QueryParam("topic") String topic,
+                                      @QueryParam("confirmation") Boolean confirmation,
+                                      byte[] payload) {
+        iotService.sendDirectMessage(clientId, topic, payload);
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("message", "OK");
+        response.put("traceId", UUID.randomUUID().toString());
+        return Response.ok(response).build();
     }
 
     @GET

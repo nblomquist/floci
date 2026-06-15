@@ -6,7 +6,11 @@ import io.moquette.broker.Server;
 import io.moquette.broker.config.IConfig;
 import io.moquette.broker.config.MemoryConfig;
 import io.moquette.interception.AbstractInterceptHandler;
+import io.moquette.interception.messages.InterceptConnectionLostMessage;
+import io.moquette.interception.messages.InterceptDisconnectMessage;
 import io.moquette.interception.messages.InterceptPublishMessage;
+import io.moquette.interception.messages.InterceptSubscribeMessage;
+import io.moquette.interception.messages.InterceptUnsubscribeMessage;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.mqtt.MqttMessageBuilders;
@@ -23,7 +27,11 @@ import org.jboss.logging.Logger;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Properties;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 @ApplicationScoped
 public class IotMqttBrokerService {
@@ -34,6 +42,7 @@ public class IotMqttBrokerService {
     private final EmulatorConfig config;
     private final IotPublishEventRecorder eventRecorder;
     private final Instance<IotService> iotService;
+    private final Map<String, Set<String>> subscriptionsByClient = new ConcurrentHashMap<>();
     private Server server;
 
     @Inject
@@ -92,6 +101,7 @@ public class IotMqttBrokerService {
         }
         server.stopServer();
         server = null;
+        subscriptionsByClient.clear();
         LOG.info("IoT MQTT broker stopped");
     }
 
@@ -123,7 +133,27 @@ public class IotMqttBrokerService {
         boolean disconnected = cleanSession
                 ? broker.disconnectAndPurgeClientState(clientId)
                 : broker.disconnectClient(clientId);
+        if (disconnected) {
+            subscriptionsByClient.remove(clientId);
+        }
         return disconnected;
+    }
+
+    Optional<ConnectionInfo> getConnection(String clientId) {
+        Server broker = server;
+        if (broker == null) {
+            return Optional.empty();
+        }
+        return broker.listConnectedClients().stream()
+                .filter(client -> clientId.equals(client.getClientID()))
+                .findFirst()
+                .map(client -> new ConnectionInfo(client.getClientID(), client.getAddress(), client.getPort()));
+    }
+
+    List<String> listSubscriptions(String clientId) {
+        return subscriptionsByClient.getOrDefault(clientId, Set.of()).stream()
+                .sorted()
+                .toList();
     }
 
     private final class PublishInterceptor extends AbstractInterceptHandler {
@@ -148,8 +178,38 @@ public class IotMqttBrokerService {
         }
 
         @Override
+        public void onSubscribe(InterceptSubscribeMessage message) {
+            subscriptionsByClient.computeIfAbsent(message.getClientID(), ignored -> ConcurrentHashMap.newKeySet())
+                    .add(message.getTopicFilter());
+        }
+
+        @Override
+        public void onUnsubscribe(InterceptUnsubscribeMessage message) {
+            Set<String> subscriptions = subscriptionsByClient.get(message.getClientID());
+            if (subscriptions != null) {
+                subscriptions.remove(message.getTopicFilter());
+                if (subscriptions.isEmpty()) {
+                    subscriptionsByClient.remove(message.getClientID());
+                }
+            }
+        }
+
+        @Override
+        public void onDisconnect(InterceptDisconnectMessage message) {
+            subscriptionsByClient.remove(message.getClientID());
+        }
+
+        @Override
+        public void onConnectionLost(InterceptConnectionLostMessage message) {
+            subscriptionsByClient.remove(message.getClientID());
+        }
+
+        @Override
         public void onSessionLoopError(Throwable error) {
             LOG.warnv("IoT MQTT session loop error: {0}", error.getMessage());
         }
+    }
+
+    record ConnectionInfo(String clientId, String address, int port) {
     }
 }

@@ -19,6 +19,11 @@ import io.github.hectorvent.floci.services.iot.model.IotThingGroup;
 import io.github.hectorvent.floci.services.iot.model.IotThingType;
 import io.github.hectorvent.floci.services.iot.model.IotTopicRule;
 import io.github.hectorvent.floci.services.iot.model.Thing;
+import io.github.hectorvent.floci.services.dynamodb.DynamoDbService;
+import io.github.hectorvent.floci.services.kinesis.KinesisService;
+import io.github.hectorvent.floci.services.lambda.LambdaService;
+import io.github.hectorvent.floci.services.lambda.model.InvocationType;
+import io.github.hectorvent.floci.services.s3.S3Service;
 import io.github.hectorvent.floci.services.sns.SnsService;
 import io.github.hectorvent.floci.services.sqs.SqsService;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -66,16 +71,24 @@ public class IotService {
     private final IotMqttBrokerService mqttBrokerService;
     private final SqsService sqsService;
     private final SnsService snsService;
+    private final S3Service s3Service;
+    private final KinesisService kinesisService;
+    private final DynamoDbService dynamoDbService;
+    private final LambdaService lambdaService;
 
     @Inject
     public IotService(StorageFactory storageFactory,
                       EmulatorConfig config,
                       RegionResolver regionResolver,
                        ObjectMapper objectMapper,
-                       IotPublishEventRecorder publishEventRecorder,
-                       IotMqttBrokerService mqttBrokerService,
-                       SqsService sqsService,
-                       SnsService snsService) {
+                        IotPublishEventRecorder publishEventRecorder,
+                        IotMqttBrokerService mqttBrokerService,
+                        SqsService sqsService,
+                        SnsService snsService,
+                        S3Service s3Service,
+                        KinesisService kinesisService,
+                        DynamoDbService dynamoDbService,
+                        LambdaService lambdaService) {
         this(storageFactory.create("iot", "iot-things.json", new TypeReference<Map<String, Thing>>() {}),
                 storageFactory.create("iot", "iot-certificates.json", new TypeReference<Map<String, IotCertificate>>() {}),
                 storageFactory.create("iot", "iot-policies.json", new TypeReference<Map<String, IotPolicy>>() {}),
@@ -89,7 +102,8 @@ public class IotService {
                 storageFactory.create("iot", "iot-thing-types.json", new TypeReference<Map<String, IotThingType>>() {}),
                 storageFactory.create("iot", "iot-thing-groups.json", new TypeReference<Map<String, IotThingGroup>>() {}),
                 storageFactory.create("iot", "iot-thing-group-memberships.json", new TypeReference<Map<String, Set<String>>>() {}),
-                config, regionResolver, objectMapper, publishEventRecorder, mqttBrokerService, sqsService, snsService);
+                config, regionResolver, objectMapper, publishEventRecorder, mqttBrokerService, sqsService, snsService,
+                s3Service, kinesisService, dynamoDbService, lambdaService);
     }
 
     IotService(StorageBackend<String, Thing> thingStore,
@@ -108,10 +122,14 @@ public class IotService {
                   EmulatorConfig config,
                  RegionResolver regionResolver,
                  ObjectMapper objectMapper,
-                 IotPublishEventRecorder publishEventRecorder,
-                 IotMqttBrokerService mqttBrokerService,
-                 SqsService sqsService,
-                 SnsService snsService) {
+                  IotPublishEventRecorder publishEventRecorder,
+                  IotMqttBrokerService mqttBrokerService,
+                  SqsService sqsService,
+                  SnsService snsService,
+                  S3Service s3Service,
+                  KinesisService kinesisService,
+                  DynamoDbService dynamoDbService,
+                  LambdaService lambdaService) {
         this.thingStore = thingStore;
         this.certificateStore = certificateStore;
         this.policyStore = policyStore;
@@ -132,6 +150,10 @@ public class IotService {
         this.mqttBrokerService = mqttBrokerService;
         this.sqsService = sqsService;
         this.snsService = snsService;
+        this.s3Service = s3Service;
+        this.kinesisService = kinesisService;
+        this.dynamoDbService = dynamoDbService;
+        this.lambdaService = lambdaService;
     }
 
     public String describeEndpoint(String endpointType) {
@@ -524,13 +546,30 @@ public class IotService {
     }
 
     public void deleteConnection(String clientId, boolean cleanSession) {
-        if (clientId == null || clientId.isBlank() || clientId.length() > 128 || clientId.startsWith("$")) {
-            throw new AwsException("InvalidRequestException", "Invalid MQTT clientId: " + clientId, 400);
-        }
+        validateMqttClientId(clientId);
         boolean disconnected = mqttBrokerService.disconnectClient(clientId, cleanSession);
         if (!disconnected) {
             throw new AwsException("ResourceNotFoundException", "MQTT client is not connected: " + clientId, 404);
         }
+    }
+
+    public IotMqttBrokerService.ConnectionInfo getConnection(String clientId) {
+        validateMqttClientId(clientId);
+        return mqttBrokerService.getConnection(clientId)
+                .orElseThrow(() -> new AwsException("ResourceNotFoundException", "MQTT client is not connected: " + clientId, 404));
+    }
+
+    public Page<String> listSubscriptions(String clientId, Integer maxResults, String nextToken) {
+        getConnection(clientId);
+        return paginate(mqttBrokerService.listSubscriptions(clientId), maxResults, nextToken);
+    }
+
+    public void sendDirectMessage(String clientId, String topic, byte[] payload) {
+        getConnection(clientId);
+        if (topic == null || topic.isBlank()) {
+            throw new AwsException("InvalidRequestException", "topic is required", 400);
+        }
+        mqttBrokerService.publish(topic, payload == null ? new byte[0] : payload);
     }
 
     public IotRetainedMessage getRetainedMessage(String topic) {
@@ -892,6 +931,12 @@ public class IotService {
         }
     }
 
+    private void validateMqttClientId(String clientId) {
+        if (clientId == null || clientId.isBlank() || clientId.length() > 128 || clientId.startsWith("$")) {
+            throw new AwsException("InvalidRequestException", "Invalid MQTT clientId: " + clientId, 400);
+        }
+    }
+
     private String thingKey(String region, String thingName) {
         return "thing:" + region + ":" + thingName;
     }
@@ -975,10 +1020,70 @@ public class IotService {
                         snsService.publish(targetArn, null, new String(payload, StandardCharsets.UTF_8), null, config.defaultRegion());
                     }
                 }
+                JsonNode s3 = action.path("s3");
+                if (s3.isObject()) {
+                    String bucketName = s3.path("bucketName").asText(null);
+                    String key = s3.path("key").asText(null);
+                    if (bucketName != null && !bucketName.isBlank() && key != null && !key.isBlank()) {
+                        s3Service.putObject(bucketName, key, payload, "application/octet-stream", Map.of());
+                    }
+                }
+                JsonNode kinesis = action.path("kinesis");
+                if (kinesis.isObject()) {
+                    String streamName = kinesis.path("streamName").asText(null);
+                    String partitionKey = kinesis.path("partitionKey").asText("floci-iot");
+                    if (streamName != null && !streamName.isBlank()) {
+                        kinesisService.putRecord(streamName, payload, partitionKey, config.defaultRegion());
+                    }
+                }
+                JsonNode dynamoDBv2 = action.path("dynamoDBv2");
+                if (dynamoDBv2.isObject()) {
+                    String tableName = dynamoDBv2.path("putItem").path("tableName").asText(null);
+                    if (tableName != null && !tableName.isBlank()) {
+                        dynamoDbService.putItem(tableName, toDynamoDbItem(payload), config.defaultRegion());
+                    }
+                }
+                JsonNode lambda = action.path("lambda");
+                if (lambda.isObject()) {
+                    String functionArn = lambda.path("functionArn").asText(null);
+                    if (functionArn != null && !functionArn.isBlank()) {
+                        lambdaService.invoke(config.defaultRegion(), functionArn, payload, InvocationType.Event);
+                    }
+                }
             }
         } catch (Exception e) {
             throw new AwsException("InvalidRequestException", "Invalid topic rule action for " + rule.getRuleName() + ": " + e.getMessage(), 400);
         }
+    }
+
+    private ObjectNode toDynamoDbItem(byte[] payload) {
+        try {
+            JsonNode document = objectMapper.readTree(payload);
+            if (!document.isObject()) {
+                throw new AwsException("InvalidRequestException", "dynamoDBv2 action payload must be a JSON object", 400);
+            }
+            ObjectNode item = objectMapper.createObjectNode();
+            document.fields().forEachRemaining(entry -> item.set(entry.getKey(), toDynamoDbAttribute(entry.getValue())));
+            return item;
+        } catch (AwsException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new AwsException("InvalidRequestException", "dynamoDBv2 action payload must be valid JSON: " + e.getMessage(), 400);
+        }
+    }
+
+    private ObjectNode toDynamoDbAttribute(JsonNode value) {
+        ObjectNode attribute = objectMapper.createObjectNode();
+        if (value == null || value.isNull()) {
+            attribute.put("NULL", true);
+        } else if (value.isBoolean()) {
+            attribute.put("BOOL", value.asBoolean());
+        } else if (value.isNumber()) {
+            attribute.put("N", value.asText());
+        } else {
+            attribute.put("S", value.asText());
+        }
+        return attribute;
     }
 
     private String extractTopicPattern(String sql) {
