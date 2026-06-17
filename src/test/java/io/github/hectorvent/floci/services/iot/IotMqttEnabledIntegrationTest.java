@@ -34,6 +34,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class IotMqttEnabledIntegrationTest {
 
     private static final int PORT = 18831;
+    private static final int CONNECT_ATTEMPTS = 3;
     private static final Logger LOG = Logger.getLogger(IotMqttEnabledIntegrationTest.class);
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
@@ -356,31 +357,73 @@ class IotMqttEnabledIntegrationTest {
     }
 
     private Socket connectMqttClientId(String clientId) throws IOException {
-        Socket socket = new MqttTestSocket();
-        socket.connect(new InetSocketAddress("127.0.0.1", PORT), 2_000);
-        socket.setSoTimeout(2_000);
-        socket.getOutputStream().write(connectPacketForClientId(clientId));
-        byte[] connack = readPacket(socket.getInputStream());
-        assertArrayEquals(new byte[] {0x20, 0x02, 0x00, 0x00}, connack);
-        return socket;
+        IOException lastFailure = null;
+        for (int attempt = 1; attempt <= CONNECT_ATTEMPTS; attempt++) {
+            Socket socket = new MqttTestSocket();
+            try {
+                socket.connect(new InetSocketAddress("127.0.0.1", PORT), 2_000);
+                socket.setSoTimeout(2_000);
+                socket.getOutputStream().write(connectPacketForClientId(clientId));
+                byte[] connack = readPacket(socket.getInputStream());
+                assertArrayEquals(new byte[] {0x20, 0x02, 0x00, 0x00}, connack);
+                assertMqttPing(socket);
+                return socket;
+            } catch (IOException e) {
+                lastFailure = e;
+                LOG.debugf(e, "MQTT test connection attempt %d failed for client %s", attempt, clientId);
+                closeAfterFailedConnect(socket);
+            } catch (AssertionError e) {
+                closeAfterFailedConnect(socket);
+                throw e;
+            }
+        }
+        throw lastFailure;
     }
 
     private Socket connectMqtt5(String clientId) throws IOException {
-        Socket socket = new MqttTestSocket();
-        socket.connect(new InetSocketAddress("127.0.0.1", PORT), 2_000);
-        socket.setSoTimeout(2_000);
-        ByteArrayOutputStream variable = new ByteArrayOutputStream();
-        writeUtf8(variable, "MQTT");
-        variable.write(0x05);
-        variable.write(0x02);
-        variable.write(0x00);
-        variable.write(0x3c);
-        variable.write(0x00);
-        writeUtf8(variable, uniqueClientId(clientId));
-        socket.getOutputStream().write(packet(0x10, variable.toByteArray()));
-        byte[] connack = readPacket(socket.getInputStream());
-        assertMqtt5SuccessConnack(connack);
-        return socket;
+        String uniqueClientId = uniqueClientId(clientId);
+        IOException lastFailure = null;
+        for (int attempt = 1; attempt <= CONNECT_ATTEMPTS; attempt++) {
+            Socket socket = new MqttTestSocket();
+            try {
+                socket.connect(new InetSocketAddress("127.0.0.1", PORT), 2_000);
+                socket.setSoTimeout(2_000);
+                ByteArrayOutputStream variable = new ByteArrayOutputStream();
+                writeUtf8(variable, "MQTT");
+                variable.write(0x05);
+                variable.write(0x02);
+                variable.write(0x00);
+                variable.write(0x3c);
+                variable.write(0x00);
+                writeUtf8(variable, uniqueClientId);
+                socket.getOutputStream().write(packet(0x10, variable.toByteArray()));
+                byte[] connack = readPacket(socket.getInputStream());
+                assertMqtt5SuccessConnack(connack);
+                assertMqttPing(socket);
+                return socket;
+            } catch (IOException e) {
+                lastFailure = e;
+                LOG.debugf(e, "MQTT 5 test connection attempt %d failed for client %s", attempt, uniqueClientId);
+                closeAfterFailedConnect(socket);
+            } catch (AssertionError e) {
+                closeAfterFailedConnect(socket);
+                throw e;
+            }
+        }
+        throw lastFailure;
+    }
+
+    private void assertMqttPing(Socket socket) throws IOException {
+        socket.getOutputStream().write(new byte[] {(byte) 0xc0, 0x00});
+        assertArrayEquals(new byte[] {(byte) 0xd0, 0x00}, readPacket(socket.getInputStream()));
+    }
+
+    private void closeAfterFailedConnect(Socket socket) {
+        try {
+            socket.close();
+        } catch (IOException e) {
+            LOG.debug("MQTT test socket could not be closed after failed connect", e);
+        }
     }
 
     private void assertMqtt5SuccessConnack(byte[] connack) {
