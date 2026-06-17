@@ -5,6 +5,7 @@ WORKDIR /build
 RUN apt-get update && apt-get install -y maven && rm -rf /var/lib/apt/lists/*
 
 COPY pom.xml .
+COPY vendor/maven ./vendor/maven
 RUN mvn dependency:go-offline -q
 
 COPY src/ src/

@@ -4,6 +4,7 @@
 !docker/localstack-parity.sh
 !pom.xml
 !src/**
+!vendor/maven/**
 !target/*.so
 !target/*.properties
 !target/*-runner

@@ -8,6 +8,7 @@ RUN curl -fsSL https://archive.apache.org/dist/maven/maven-3/3.9.12/binaries/apa
     && ln -sf /opt/apache-maven-3.9.12/bin/mvn /usr/local/bin/mvn
 
 COPY pom.xml .
+COPY vendor/maven ./vendor/maven
 RUN mvn dependency:go-offline -B
 COPY src ./src
 
