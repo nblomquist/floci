@@ -48,18 +48,17 @@ Current MVP 2 limitations:
 - Jobs reserved MQTT topics remain follow-up scope; Jobs Data HTTP APIs are implemented first.
 - Dynamic thing groups, fleet indexing, job rollouts, cancellations, documents from S3, and advanced job scheduling are not yet modeled.
 
-## Phase 7 MQTT Broker Decision
+## MQTT Broker
 
 Status: complete.
 
-Phase 7 keeps the embedded Moquette broker. Replacing it with a hand-written socket broker is not acceptable because real MQTT client compatibility requires broker behavior beyond simple CONNECT, SUBSCRIBE, and QoS 0 PUBLISH handling.
+Floci uses Vert.x MQTT as the embedded MQTT protocol server. `IotMqttBrokerService` owns the broker lifecycle, live session registry, subscription registry, MQTT fan-out, and the bridge into IoT service behavior.
 
-The broker direction for phase 7 is:
+Broker scope:
 
-- Use the vendored Floci Moquette build as the MQTT broker dependency.
-- Keep native-image support required, including the Moquette runtime-initialization configuration needed by Quarkus native builds.
-- Target real AWS IoT/device SDK style MQTT 5 clients, not only handcrafted packet tests.
-- Require MQTT 5 CONNECT, SUBSCRIBE, and PUBLISH handling with MQTT 5 property-length encoding for QoS 0 traffic.
+- Target real AWS IoT/device SDK style MQTT clients, not only handcrafted packet tests.
+- Support MQTT v3 and MQTT 5 CONNECT handling used by local compatibility tests.
+- Support QoS 0 and QoS 1 publish/subscribe behavior for the local AWS IoT slice.
 - Keep MQTT plaintext-only for this phase; TLS and mTLS are out of scope.
 - Keep MQTT authorization permissive for now, but leave room for a later pluggable IoT certificate and policy authorizer.
 - Keep MQTT broker logging minimal.
@@ -76,39 +75,38 @@ Required phase 7 reserved-topic behavior:
 - Shadow response topics: `accepted`, `rejected`, `documents`, and `delta` where applicable.
 - Basic Ingest and Jobs topic families are desired follow-up scope, but should not block restoring the broker unless explicitly pulled into the implementation phase.
 
-Moquette's public interceptor API observes publishes but does not provide a stock pre-route rewrite or drop hook. Because of that limitation, Floci should not expose a user-facing "strict reserved topic passthrough" configuration in phase 7 unless strict suppression is actually implemented.
+Reserved request topics are handled by Floci before normal MQTT fan-out. The original `$aws/...` request publish is not routed as an application message; generated accepted, rejected, documents, and delta responses are published back through `IotMqttBrokerService.publish(...)` so matching MQTT subscribers receive broker-native messages.
 
-Phase 7 implementation note:
+Implementation notes:
 
-- A first Moquette restoration slice showed that stock Moquette rejects inbound client publishes to topics beginning with `$` before the publish interceptor can handle them.
-- The log message is `Avoid to publish on topic which contains reserved topic (starts with $)`.
-- This blocked AWS IoT reserved request topics such as `$aws/things/{thingName}/shadow/update` on the stock-Moquette path.
-- Floci uses a patched Moquette build that allows configured reserved publish prefixes, with Floci configuring `$aws/`.
+- Vert.x MQTT handles the wire protocol and connection lifecycle.
+- Floci-owned session, subscription, and retained-message state drives local AWS IoT compatibility behavior.
+- Normal client publishes call `IotService.publish(...)` so retained-message storage, event recording, and rule evaluation remain service-owned.
+- Internal broker publishes fan out only to MQTT subscribers and do not recursively evaluate IoT topic rules.
 
 Current accepted limitation:
 
-- If stock Moquette routes the original reserved request publish to subscribers, Floci may accept that passthrough temporarily while still publishing the correct AWS response topics.
-- Do not document strict AWS-style suppression as supported until it is enforceable.
-- If strict suppression becomes required by compatibility tests, revisit a Moquette fork, upstream patch, or broker front-filter design.
+- Certificate and policy authorization are not enforced at the broker layer yet.
+- Persistent offline sessions are not modeled yet.
+- QoS 2 and advanced MQTT 5 property semantics remain follow-up scope.
 
 ## Implementation Shape
 
 The MQTT integration should keep service behavior separated from broker mechanics:
 
-- `IotMqttBrokerService` owns Moquette lifecycle and broker-native publish helpers.
-- A Moquette publish interceptor detects AWS IoT reserved topics.
+- `IotMqttBrokerService` owns Vert.x MQTT lifecycle and broker-native publish helpers.
+- The broker publish handler detects AWS IoT reserved topics.
 - IoT reserved-topic handling lives in IoT service code or a focused reserved-topic handler, not in packet parsing code.
-- AWS-generated shadow responses are published back through Moquette with `Server.internalPublish(...)` so regular MQTT subscribers receive broker-native messages.
+- AWS-generated shadow responses are published back through `IotMqttBrokerService.publish(...)` so regular MQTT subscribers receive broker-native messages.
 
 ## Phase 7 Completion Criteria
 
 Phase 7 completion criteria:
 
-- Moquette is restored as the active MQTT broker implementation.
-- The hand-written socket broker is removed or no longer used for MQTT service behavior.
-- Reserved shadow topics are handled from a Moquette interceptor or equivalent broker bridge.
-- AWS-generated shadow responses are published through Moquette, not by manually writing MQTT packets.
-- MQTT 5 QoS 0 CONNECT, SUBSCRIBE, and PUBLISH behavior is tested with MQTT 5 property-length encoding.
+- Vert.x MQTT is the active MQTT broker implementation.
+- Reserved shadow topics are handled from the broker publish handler.
+- AWS-generated shadow responses are published through the broker service, not by manually writing MQTT packets.
+- MQTT 5 CONNECT and publish/subscribe behavior are covered by automated tests.
 - Classic unnamed shadow MQTT topics are covered by automated tests.
 - Named shadow MQTT topics are covered by automated tests.
 - Relevant IoT compatibility tests pass against the native binary.
@@ -125,7 +123,7 @@ Supported rule behavior:
 - SQL topic filter extraction for rules shaped like `SELECT * FROM 'topic/filter'`.
 - MQTT-style topic filter matching for exact topics, `+`, and terminal `#`.
 - IoT Data `Publish` and MQTT publishes use the same rule dispatch path.
-- `republish` action republishes the original payload to another MQTT topic through Moquette.
+- `republish` action republishes the original payload to another MQTT topic through `IotMqttBrokerService`.
 - `sqs` action sends the original payload to an SQS queue through Floci's SQS service boundary.
 - `sns` action publishes the original payload to an SNS topic through Floci's SNS service boundary.
 - `s3` action writes the original payload to the configured bucket/key through Floci's S3 service boundary.
