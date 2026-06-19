@@ -1,31 +1,28 @@
 package io.github.hectorvent.floci.services.iot;
 
 import io.github.hectorvent.floci.config.EmulatorConfig;
-import io.moquette.BrokerConstants;
-import io.moquette.broker.Server;
-import io.moquette.broker.config.FluentConfig;
-import io.moquette.broker.config.IConfig;
-import io.moquette.interception.AbstractInterceptHandler;
-import io.moquette.interception.messages.InterceptConnectionLostMessage;
-import io.moquette.interception.messages.InterceptDisconnectMessage;
-import io.moquette.interception.messages.InterceptPublishMessage;
-import io.moquette.interception.messages.InterceptSubscribeMessage;
-import io.moquette.interception.messages.InterceptUnsubscribeMessage;
-import io.netty.buffer.ByteBuf;
-import io.netty.buffer.Unpooled;
-import io.netty.handler.codec.mqtt.MqttMessageBuilders;
-import io.netty.handler.codec.mqtt.MqttProperties;
-import io.netty.handler.codec.mqtt.MqttPublishMessage;
+import io.github.hectorvent.floci.services.iot.model.IotRetainedMessage;
 import io.netty.handler.codec.mqtt.MqttQoS;
 import io.quarkus.runtime.ShutdownEvent;
 import io.quarkus.runtime.StartupEvent;
+import io.vertx.core.Vertx;
+import io.vertx.core.buffer.Buffer;
+import io.vertx.core.net.SocketAddress;
+import io.vertx.mqtt.MqttEndpoint;
+import io.vertx.mqtt.MqttServer;
+import io.vertx.mqtt.MqttServerOptions;
+import io.vertx.mqtt.messages.MqttPublishMessage;
+import io.vertx.mqtt.messages.MqttSubscribeMessage;
+import io.vertx.mqtt.messages.MqttUnsubscribeMessage;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
 import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
-import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Base64;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -36,19 +33,18 @@ import java.util.concurrent.ConcurrentHashMap;
 public class IotMqttBrokerService {
 
     private static final Logger LOG = Logger.getLogger(IotMqttBrokerService.class);
-    private static final String INTERNAL_CLIENT_ID = "floci-iot";
 
     private final EmulatorConfig config;
-    private final IotPublishEventRecorder eventRecorder;
+    private final Vertx vertx;
     private final Instance<IotService> iotService;
-    private final Map<String, Set<String>> subscriptionsByClient = new ConcurrentHashMap<>();
-    private Server server;
+    private final Map<String, ClientSession> sessionsByClient = new ConcurrentHashMap<>();
+    private final Map<String, Map<String, Subscription>> subscriptionsByClient = new ConcurrentHashMap<>();
+    private MqttServer server;
 
     @Inject
-    public IotMqttBrokerService(EmulatorConfig config, IotPublishEventRecorder eventRecorder,
-                                Instance<IotService> iotService) {
+    public IotMqttBrokerService(EmulatorConfig config, Vertx vertx, Instance<IotService> iotService) {
         this.config = config;
-        this.eventRecorder = eventRecorder;
+        this.vertx = vertx;
         this.iotService = iotService;
     }
 
@@ -76,31 +72,33 @@ public class IotMqttBrokerService {
             return;
         }
 
-        IConfig brokerConfig = new FluentConfig()
-                .host(config.services().iot().mqtt().host())
-                .port(config.services().iot().mqtt().port())
-                .disablePersistence()
-                .build();
-        brokerConfig.setProperty(BrokerConstants.ALLOW_RESERVED_PUBLISH_PREFIXES, "$aws/");
+        MqttServer mqttServer = MqttServer.create(vertx, new MqttServerOptions()
+                .setHost(config.services().iot().mqtt().host())
+                .setPort(config.services().iot().mqtt().port()));
+        mqttServer.endpointHandler(this::handleEndpoint);
+        mqttServer.exceptionHandler(error -> LOG.warnv("IoT MQTT broker error: {0}", error.getMessage()));
 
         try {
-            Server broker = new Server();
-            broker.startServer(brokerConfig, List.of(new PublishInterceptor()));
-            server = broker;
+            mqttServer.listen().toCompletionStage().toCompletableFuture().join();
+            server = mqttServer;
             LOG.infov("IoT MQTT broker started on {0}:{1}",
                     config.services().iot().mqtt().host(), config.services().iot().mqtt().port());
-        } catch (IOException e) {
+        } catch (Exception e) {
+            mqttServer.close();
             throw new IllegalStateException("Failed to start IoT MQTT broker", e);
         }
     }
 
     synchronized void stop() {
-        if (server == null) {
+        MqttServer mqttServer = server;
+        if (mqttServer == null) {
             return;
         }
-        server.stopServer();
         server = null;
+        sessionsByClient.values().forEach(session -> session.endpoint().close());
+        sessionsByClient.clear();
         subscriptionsByClient.clear();
+        mqttServer.close().toCompletionStage().toCompletableFuture().join();
         LOG.info("IoT MQTT broker stopped");
     }
 
@@ -109,104 +107,217 @@ public class IotMqttBrokerService {
     }
 
     void publish(String topic, byte[] payload) {
-        Server broker = server;
-        if (broker == null) {
+        if (server == null) {
             return;
         }
-        ByteBuf buffer = Unpooled.wrappedBuffer(payload == null ? new byte[0] : payload);
-        MqttPublishMessage message = MqttMessageBuilders.publish()
-                .topicName(topic)
-                .qos(MqttQoS.AT_MOST_ONCE)
-                .retained(false)
-                .payload(buffer)
-                .properties(MqttProperties.NO_PROPERTIES)
-                .build();
-        broker.internalPublish(message, INTERNAL_CLIENT_ID);
+        fanOut(topic, payload == null ? new byte[0] : payload, false);
     }
 
     boolean disconnectClient(String clientId, boolean cleanSession) {
-        Server broker = server;
-        if (broker == null) {
+        ClientSession session = sessionsByClient.remove(clientId);
+        if (session == null) {
             return false;
         }
-        boolean disconnected = cleanSession
-                ? broker.disconnectAndPurgeClientState(clientId)
-                : broker.disconnectClient(clientId);
-        if (disconnected) {
+        if (cleanSession) {
             subscriptionsByClient.remove(clientId);
         }
-        return disconnected;
+        session.endpoint().close();
+        return true;
     }
 
     Optional<ConnectionInfo> getConnection(String clientId) {
-        Server broker = server;
-        if (broker == null) {
+        if (server == null) {
             return Optional.empty();
         }
-        return broker.listConnectedClients().stream()
-                .filter(client -> clientId.equals(client.getClientID()))
-                .findFirst()
-                .map(client -> new ConnectionInfo(client.getClientID(), client.getAddress(), client.getPort()));
+        ClientSession session = sessionsByClient.get(clientId);
+        if (session == null || !session.endpoint().isConnected()) {
+            return Optional.empty();
+        }
+        return Optional.of(new ConnectionInfo(session.clientId(), session.sourceIp(), session.sourcePort()));
     }
 
     List<String> listSubscriptions(String clientId) {
-        return subscriptionsByClient.getOrDefault(clientId, Set.of()).stream()
+        return subscriptionsByClient.getOrDefault(clientId, Map.of()).keySet().stream()
                 .sorted()
                 .toList();
     }
 
-    private final class PublishInterceptor extends AbstractInterceptHandler {
-        @Override
-        public String getID() {
-            return "floci-iot-publish";
+    private void handleEndpoint(MqttEndpoint endpoint) {
+        String clientId = endpoint.clientIdentifier();
+        SocketAddress remoteAddress = endpoint.remoteAddress();
+        ClientSession session = new ClientSession(
+                clientId,
+                endpoint,
+                remoteAddress == null ? null : remoteAddress.host(),
+                remoteAddress == null ? -1 : remoteAddress.port(),
+                endpoint.isCleanSession());
+
+        endpoint.subscriptionAutoAck(false);
+        endpoint.publishAutoAck(false);
+        endpoint.exceptionHandler(error -> LOG.warnv("IoT MQTT client {0} error: {1}", clientId, error.getMessage()));
+        endpoint.subscribeHandler(message -> handleSubscribe(session, message));
+        endpoint.unsubscribeHandler(message -> handleUnsubscribe(session, message));
+        endpoint.publishHandler(message -> handlePublish(session, message));
+        endpoint.disconnectHandler(ignored -> removeSession(session));
+        endpoint.closeHandler(ignored -> removeSession(session));
+
+        ClientSession previous = sessionsByClient.put(clientId, session);
+        if (previous != null && previous.endpoint() != endpoint) {
+            previous.endpoint().close();
         }
 
-        @Override
-        public void onPublish(InterceptPublishMessage message) {
-            ByteBuf payload = message.getPayload();
-            byte[] bytes = new byte[payload.readableBytes()];
-            payload.getBytes(payload.readerIndex(), bytes);
-            String topic = message.getTopicName();
+        endpoint.accept();
+    }
 
-            if (topic.startsWith("$aws/")) {
-                iotService.get().handleReservedMqttPublish(topic, bytes, IotMqttBrokerService.this::publish);
-                return;
+    private void handleSubscribe(ClientSession session, MqttSubscribeMessage message) {
+        Map<String, Subscription> clientSubscriptions = subscriptionsByClient.computeIfAbsent(
+                session.clientId(), ignored -> new ConcurrentHashMap<>());
+        List<MqttQoS> grantedQos = new ArrayList<>();
+        List<Subscription> accepted = new ArrayList<>();
+
+        for (io.vertx.mqtt.MqttTopicSubscription requested : message.topicSubscriptions()) {
+            String topicFilter = requested.topicName();
+            MqttQoS qos = requested.qualityOfService();
+            if (!isValidTopicFilter(topicFilter) || qos == MqttQoS.EXACTLY_ONCE) {
+                grantedQos.add(MqttQoS.FAILURE);
+                continue;
             }
 
-            iotService.get().publish(topic, bytes);
+            int granted = qos == MqttQoS.AT_LEAST_ONCE ? 1 : 0;
+            Subscription subscription = new Subscription(topicFilter, granted);
+            clientSubscriptions.put(topicFilter, subscription);
+            accepted.add(subscription);
+            grantedQos.add(granted == 1 ? MqttQoS.AT_LEAST_ONCE : MqttQoS.AT_MOST_ONCE);
         }
 
-        @Override
-        public void onSubscribe(InterceptSubscribeMessage message) {
-            subscriptionsByClient.computeIfAbsent(message.getClientID(), ignored -> ConcurrentHashMap.newKeySet())
-                    .add(message.getTopicFilter());
-        }
+        session.endpoint().subscribeAcknowledge(message.messageId(), grantedQos);
+        deliverRetained(session, accepted);
+    }
 
-        @Override
-        public void onUnsubscribe(InterceptUnsubscribeMessage message) {
-            Set<String> subscriptions = subscriptionsByClient.get(message.getClientID());
-            if (subscriptions != null) {
-                subscriptions.remove(message.getTopicFilter());
-                if (subscriptions.isEmpty()) {
-                    subscriptionsByClient.remove(message.getClientID());
-                }
+    private void handleUnsubscribe(ClientSession session, MqttUnsubscribeMessage message) {
+        Map<String, Subscription> clientSubscriptions = subscriptionsByClient.get(session.clientId());
+        if (clientSubscriptions != null) {
+            for (String topic : message.topics()) {
+                clientSubscriptions.remove(topic);
+            }
+            if (clientSubscriptions.isEmpty()) {
+                subscriptionsByClient.remove(session.clientId(), clientSubscriptions);
             }
         }
+        session.endpoint().unsubscribeAcknowledge(message.messageId());
+    }
 
-        @Override
-        public void onDisconnect(InterceptDisconnectMessage message) {
-            subscriptionsByClient.remove(message.getClientID());
+    private void handlePublish(ClientSession session, MqttPublishMessage message) {
+        byte[] payload = message.payload().getBytes();
+        if (message.qosLevel() == MqttQoS.EXACTLY_ONCE) {
+            session.endpoint().close();
+            return;
+        }
+        if (message.qosLevel() == MqttQoS.AT_LEAST_ONCE) {
+            session.endpoint().publishAcknowledge(message.messageId());
         }
 
-        @Override
-        public void onConnectionLost(InterceptConnectionLostMessage message) {
-            subscriptionsByClient.remove(message.getClientID());
+        String topic = message.topicName();
+        if (topic.startsWith("$aws/")) {
+            iotService.get().handleReservedMqttPublish(topic, payload, this::publish);
+            return;
         }
 
-        @Override
-        public void onSessionLoopError(Throwable error) {
-            LOG.warnv("IoT MQTT session loop error: {0}", error.getMessage());
+        iotService.get().publish(topic, payload, message.isRetain(), message.qosLevel().value());
+        fanOut(topic, payload, false);
+    }
+
+    private void fanOut(String topic, byte[] payload, boolean retained) {
+        byte[] safePayload = payload == null ? new byte[0] : payload.clone();
+        for (ClientSession session : sessionsByClient.values()) {
+            if (!session.endpoint().isConnected() || !hasMatchingSubscription(session.clientId(), topic)) {
+                continue;
+            }
+            session.endpoint().publish(topic, Buffer.buffer(safePayload), MqttQoS.AT_MOST_ONCE, false, retained);
         }
+    }
+
+    private boolean hasMatchingSubscription(String clientId, String topic) {
+        Map<String, Subscription> subscriptions = subscriptionsByClient.get(clientId);
+        if (subscriptions == null) {
+            return false;
+        }
+        return subscriptions.values().stream().anyMatch(subscription -> topicMatches(subscription.topicFilter(), topic));
+    }
+
+    private void deliverRetained(ClientSession session, List<Subscription> subscriptions) {
+        if (subscriptions.isEmpty()) {
+            return;
+        }
+        Set<String> deliveredTopics = new HashSet<>();
+        for (IotRetainedMessage retained : iotService.get().listRetainedMessages(null, null).items()) {
+            if (!deliveredTopics.add(retained.getTopic())) {
+                continue;
+            }
+            boolean matches = subscriptions.stream()
+                    .anyMatch(subscription -> topicMatches(subscription.topicFilter(), retained.getTopic()));
+            if (!matches) {
+                continue;
+            }
+            byte[] payload = Base64.getDecoder().decode(retained.getPayload());
+            session.endpoint().publish(retained.getTopic(), Buffer.buffer(payload), MqttQoS.AT_MOST_ONCE, false, true);
+        }
+    }
+
+    private void removeSession(ClientSession session) {
+        sessionsByClient.remove(session.clientId(), session);
+        if (session.cleanSession()) {
+            subscriptionsByClient.remove(session.clientId());
+        }
+    }
+
+    private boolean isValidTopicFilter(String topicFilter) {
+        if (topicFilter == null || topicFilter.isBlank()) {
+            return false;
+        }
+        String[] levels = topicFilter.split("/", -1);
+        for (int i = 0; i < levels.length; i++) {
+            String level = levels[i];
+            if (level.contains("#") && (!"#".equals(level) || i != levels.length - 1)) {
+                return false;
+            }
+            if (level.contains("+") && !"+".equals(level)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean topicMatches(String topicFilter, String topic) {
+        if (topicFilter.equals(topic)) {
+            return true;
+        }
+        String[] filterLevels = topicFilter.split("/", -1);
+        String[] topicLevels = topic.split("/", -1);
+        for (int i = 0; i < filterLevels.length; i++) {
+            String filterLevel = filterLevels[i];
+            if ("#".equals(filterLevel)) {
+                return i == filterLevels.length - 1;
+            }
+            if (i >= topicLevels.length) {
+                return false;
+            }
+            if (!"+".equals(filterLevel) && !filterLevel.equals(topicLevels[i])) {
+                return false;
+            }
+        }
+        return filterLevels.length == topicLevels.length;
+    }
+
+    private record ClientSession(
+            String clientId,
+            MqttEndpoint endpoint,
+            String sourceIp,
+            int sourcePort,
+            boolean cleanSession) {
+    }
+
+    private record Subscription(String topicFilter, int qos) {
     }
 
     record ConnectionInfo(String clientId, String address, int port) {
